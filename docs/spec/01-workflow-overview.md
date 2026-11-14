@@ -17,8 +17,9 @@ dropdown — conceptually the same idea (a mode switch), different widget.
 ## Core hierarchy
 
 ```
-Job / Document
-└── Setup                  (one per stock orientation / machine mounting)
+Document
+└── Setup                  (one per stock orientation / machine mounting; a document can hold
+    │                        several, side by side, when a part needs to be flipped/re-fixtured)
     ├── Stock definition   (box/cylinder, offsets from the model's bounding geometry)
     ├── WCS (work coordinate system) — origin and orientation for this setup
     ├── Model geometry reference (which bodies/faces this setup machines)
@@ -26,9 +27,12 @@ Job / Document
     └── Operation          (one per toolpath: 2D Pocket, 2D Contour, Drilling, ...)
 ```
 
-A **Setup** is the top-level grouping container — it represents one physical mounting of stock in
-the machine. Multiple setups exist when a part needs to be flipped/re-fixtured to machine
-different faces. Operations live under a Setup, optionally grouped into Folders.
+A **Setup** represents one physical mounting of stock in the machine, and owns its own stock,
+WCS, and operations directly — it is not a sub-container nested inside something bigger; a
+document with multiple setups just has several of these side by side. **FreeCAD's equivalent is
+one `Path.Main.Job.ObjectJob` per Setup** (verified against FreeCAD's own source — `Job` owns
+stock/WCS/operations directly, with no separate "Setup" object nested inside it), not one Job
+containing multiple Setups. Operations live under a Setup/Job, optionally grouped into Folders.
 
 ## Standard sequence
 
@@ -42,9 +46,9 @@ different faces. Operations live under a Setup, optionally grouped into Folders.
    posting.
 5. **Post-process** — generate G-code via a post-processor selected for the target controller.
 
-FreeCAD's Path/CAM workbench already has an equivalent structure (`Job` → `Setup`/stock →
-`Operation`), so Phase 1's job is primarily a UI/UX layer matching this sequence and terminology,
-not a new underlying data model.
+FreeCAD's CAM module already has an equivalent structure (one `Job` per Setup, owning stock and
+operations directly — see "Core hierarchy" above), so Phase 1's job is primarily a UI/UX layer
+matching this sequence and terminology, not a new underlying data model.
 
 ## Open questions for later spec passes
 - Exact tool-library UI/workflow (tool creation, holders, presets) — not yet researched.

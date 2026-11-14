@@ -14,7 +14,9 @@ checking.**
 
 Purpose: flatten the top of stock to a known reference height. Typically the first operation in a
 setup, run before anything else references a clean top face.
-- Geometry input: a face selection (the top of stock).
+- Geometry input: **no selection is required by default** — it uses the stock defined in the
+  setup. An edge or sketch can optionally be selected to limit the faced area to less than the
+  full stock top.
 - For larger stock removal than a simple skim, Adaptive Clearing is used instead of Face.
 - **FreeCAD mapping**: `Path Face` operation — same purpose, direct equivalent.
 
@@ -23,8 +25,9 @@ setup, run before anything else references a clean top face.
 Purpose: clear material from within a closed boundary down to a depth.
 - Geometry input: can come from sketch edges, solid-model edges, or a selected solid face —
   three distinct input modes, not just "pick a sketch."
-- Options include tapered walls and a pre-drill entry position (for plunging into a pilot hole
-  rather than ramping/helixing in blind).
+- Options include tapered walls, a pre-drill entry position (for plunging into a pilot hole
+  rather than ramping/helixing in blind), and separate axial/radial stock-to-leave — the same
+  stock-to-leave controls Adaptive Clearing also exposes (see that section's correction below).
 - **FreeCAD mapping**: `Path Pocket` (2.5D) operations — base concept matches; taper-wall and
   pre-drill-entry-position options need to be checked against what FreeCAD's pocket op currently
   exposes (not yet verified — Phase 1 task).
@@ -45,10 +48,12 @@ too (not finishing-only).
 Purpose: roughing strategy that clears bulk material while avoiding sharp direction changes and
 full-width conventional cuts — keeps consistent tool engagement to protect tool life and allow
 higher feed rates.
-- Per Autodesk's own reference, the dialog's tabs mostly overlap with 2D Pocket's — the fourth
-  tab is where the meaningful differences live (stock-to-leave values specific to adaptive
-  strategies: separate axial vs. radial stock-to-leave, e.g. one cited example used 0" axial /
-  0.020" radial).
+- Per Autodesk's own reference, the dialog's tabs mostly overlap with 2D Pocket's. **Correction**:
+  separate axial/radial stock-to-leave is *not* Adaptive-specific — Fusion's own Pocket reference
+  documents both controls too, so this is a shared control across both operations, not a
+  distinguishing one. The real Adaptive-specific control on that fourth tab is **Optimal Load**
+  (target tool engagement/chip load for the adaptive strategy) — that's the one worth calling out
+  as the meaningful difference from Pocket.
 - **Patent note**: this is the strategy name most associated with Autodesk's adaptive-clearing
   patents. Per [CLEAN-ROOM.md](../CLEAN-ROOM.md), implement against published trochoidal/adaptive
   milling literature and FreeCAD's own existing adaptive-clearing-style path (if any) rather than
@@ -66,7 +71,7 @@ research pass before mapping it.
 ## Cross-cutting items not yet covered
 - Lead-in/lead-out and ramp/helix entry options — referenced in passing above (pocket pre-drill,
   adaptive's avoidance of sharp turns) but not spec'd as their own parameter set yet.
-- Stock-to-leave as a general concept (seen on Adaptive) — check whether Pocket/Contour expose the
-  same control.
+- Stock-to-leave as a general concept — confirmed shared by Pocket and Adaptive; check whether
+  Contour/Drilling expose the same control.
 - Tool library UI — out of scope for this file, tracked as an open question in
   `01-workflow-overview.md`.

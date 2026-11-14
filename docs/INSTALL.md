@@ -24,13 +24,17 @@ Clone this repo directly into your FreeCAD user `Mod` directory:
 git clone <this-repo-url> ~/.local/share/FreeCAD/Mod/CamStudio
 
 # macOS
-git clone <this-repo-url> ~/Library/Preferences/FreeCAD/Mod/CamStudio
+git clone <this-repo-url> "~/Library/Application Support/FreeCAD/Mod/CamStudio"
 
 # Windows (PowerShell)
 git clone <this-repo-url> "$env:APPDATA\FreeCAD\Mod\CamStudio"
 ```
 
 Restart FreeCAD. "CAM Studio" should appear in the workbench selector dropdown.
+
+If any of these paths don't match your install (portable installs, Snap/Flatpak, etc.), confirm
+the real one from FreeCAD's own Python console: `App.getUserAppDataDir()` prints the actual
+directory FreeCAD is using, with `Mod` as a subdirectory of it.
 
 ## Current status
 
