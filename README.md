@@ -12,6 +12,12 @@ to make this. Behavior is derived only from Autodesk's own public documentation,
 screenshots. See [docs/CLEAN-ROOM.md](docs/CLEAN-ROOM.md) for the full provenance statement and
 [docs/ROADMAP.md](docs/ROADMAP.md) for the phased plan.
 
+## Install
+
+Not on FreeCAD's official Addon catalogue — by design, see [docs/INSTALL.md](docs/INSTALL.md).
+Install directly from this repo via Addon Manager's custom-repository option, or clone into your
+FreeCAD `Mod` directory.
+
 ## Status
 
 Early scaffolding. No working code yet — currently in the **Study** phase: building a
