@@ -52,9 +52,31 @@ are what this project replaces, and nothing else.
    each operation's existing properties using the Setup → Operations tree structure and dialog
    organization described in `docs/spec/`, instead of stock CAM's own panel layout.
 
-## Open item before implementation starts
+## Resolved: how the edit/double-click swap actually works
 
-Need a short spike on how an external addon registers a replacement `TaskPanel` for an existing
-op's double-click/"edit" behavior (versus just adding new "create" commands, which is
-straightforward). Not yet verified against FreeCAD's ViewProvider/command dispatch — check this
-before committing to the Phase 1 task-panel work in the roadmap.
+(Previously an open item — verified by reading `Path/Op/Gui/Base.py` and `Pocket.py`/`Adaptive.py`
+directly.)
+
+FreeCAD doesn't dispatch edit-on-double-click by object *type* through a central registry — it's
+per-instance. Every `Path.Op.*` object's `obj.ViewObject.Proxy` is one *generic*
+`Path.Op.Gui.Base.ViewProvider` class (the same class for every operation type), parameterized by
+a small resource bundle (`Base.py`'s `CommandResources`) that names which `TaskPanelOpPage`
+subclass to plug into the shared `TaskPanel` controller (`Base.py`'s generic `TaskPanel` class,
+which assembles the op-specific page plus shared pages like geometry/heights/tool-controller).
+
+That `ViewObject.Proxy` assignment happens exactly once, at creation time, inside whichever
+`Command.Create()` built the object — `Base.py:1877`: `obj.ViewObject.Proxy = ViewProvider(obj.ViewObject, res)`.
+Stock CAM's own `Pocket.py`/`Adaptive.py`/etc. each just define their own `TaskPanelOpPage`
+subclass and a `Command` that calls `Base.Create()` with a `res` pointing at that page.
+
+**Implication**: we don't touch `Path/Op/Gui/*.py` at all. We define our own `TaskPanelOpPage`
+subclasses (matching `docs/spec/`'s workflow/terminology) and our own `Command` classes that
+create the same `Path.Op.*` objects but pass a `res` pointing at *our* pages instead of stock
+CAM's. Objects our commands create open in our UI on double-click; objects stock CAM's commands
+create keep opening in stock CAM's UI. Fully additive — no core patch, no subclassing
+`ViewProvider` itself needed.
+
+**Not yet covered** (not required for Phase 1, flagged for later): making a *pre-existing*,
+stock-CAM-created object open in our UI instead would require reassigning its `ViewObject.Proxy`
+post-hoc (e.g. on document load) — not attempted yet, since Phase 1's plan is new jobs created
+through our own commands, not re-skinning documents that already exist.
