@@ -29,7 +29,10 @@ page (the authoritative parameter-by-parameter doc, not a tutorial/forum source 
 this file) — described in our own words, not quoted verbatim. This supersedes the thinner draft
 this section used to have; CAM Studio's current implementation (see `ops/pocket.py`,
 `pages/pocket.py`) covers only a subset, tracked field-by-field against this list in
-`docs/ROADMAP.md`.
+`docs/ROADMAP.md`. The five-tab structure (Tool/Geometry/Heights/Passes/Linking) and the Tool
+tab's Select.../Coolant/Feed & Speed layout are independently corroborated by a screenshot of
+Allan's own Fusion install (2D Adaptive operation — the same dialog chrome is shared across 2D
+strategies, not Pocket-specific).
 
 **Tool tab**: Coolant, plus a full Feed & Speed section (Spindle Speed, Surface Speed, Ramp
 Spindle Speed, Cutting Feedrate, Feed per Tooth, Lead-In/Lead-Out/Transition/Ramp/Plunge

@@ -160,6 +160,22 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             translate("CamStudio_Pocket", "Maximum Ramp Stepdown (0 = unconstrained)"),
             form.maxRampStepdown,
         )
+        form.useLeadInOut = QtWidgets.QCheckBox(
+            translate("CamStudio_Pocket", "Lead-In/Lead-Out (Linear, disabled with Helix ramp)")
+        )
+        form.leadInDistance = _quantity_spinbox()
+        form.sameAsLeadIn = QtWidgets.QCheckBox(
+            translate("CamStudio_Pocket", "Same as Lead-In")
+        )
+        form.leadOutDistance = _quantity_spinbox()
+        linking_layout.addRow(form.useLeadInOut)
+        linking_layout.addRow(
+            translate("CamStudio_Pocket", "Lead-In Distance"), form.leadInDistance
+        )
+        linking_layout.addRow(form.sameAsLeadIn)
+        linking_layout.addRow(
+            translate("CamStudio_Pocket", "Lead-Out Distance"), form.leadOutDistance
+        )
         linking_group.setContentLayout(linking_layout)
         layout.addWidget(linking_group)
 
@@ -205,6 +221,16 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         self.form.helicalRampDiameter.setEnabled(isHelix)
         self.form.minimumRampDiameter.setEnabled(isHelix)
         self.form.maxRampStepdown.setEnabled(isHelix)
+        # Mutually exclusive with Lead-In/Lead-Out for now -- see ops/pocket.py's
+        # _applyLeadInOut docstring.
+        self.form.useLeadInOut.setEnabled(not isHelix)
+        self.updateLeadInOutFieldsEnabled(obj)
+
+    def updateLeadInOutFieldsEnabled(self, obj):
+        active = obj.UseLeadInOut and obj.RampType != "Helix"
+        self.form.leadInDistance.setEnabled(active)
+        self.form.sameAsLeadIn.setEnabled(active)
+        self.form.leadOutDistance.setEnabled(active and not obj.SameAsLeadIn)
 
     def getFields(self, obj):
         if obj.CutMode != str(self.form.cutMode.currentData()):
@@ -242,6 +268,14 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             obj.MinimumRampDiameter = _qty_get(self.form.minimumRampDiameter)
         if obj.MaxRampStepdown.Value != _qty_get(self.form.maxRampStepdown):
             obj.MaxRampStepdown = _qty_get(self.form.maxRampStepdown)
+        if obj.UseLeadInOut != self.form.useLeadInOut.isChecked():
+            obj.UseLeadInOut = self.form.useLeadInOut.isChecked()
+        if obj.LeadInDistance.Value != _qty_get(self.form.leadInDistance):
+            obj.LeadInDistance = _qty_get(self.form.leadInDistance)
+        if obj.SameAsLeadIn != self.form.sameAsLeadIn.isChecked():
+            obj.SameAsLeadIn = self.form.sameAsLeadIn.isChecked()
+        if obj.LeadOutDistance.Value != _qty_get(self.form.leadOutDistance):
+            obj.LeadOutDistance = _qty_get(self.form.leadOutDistance)
 
         self.updateToolController(obj, self.form.toolController)
         self.updateCoolant(obj, self.form.coolantController)
@@ -266,6 +300,10 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         _qty_set(self.form.helicalRampDiameter, obj.HelicalRampDiameter.Value)
         _qty_set(self.form.minimumRampDiameter, obj.MinimumRampDiameter.Value)
         _qty_set(self.form.maxRampStepdown, obj.MaxRampStepdown.Value)
+        self.form.useLeadInOut.setChecked(obj.UseLeadInOut)
+        _qty_set(self.form.leadInDistance, obj.LeadInDistance.Value)
+        self.form.sameAsLeadIn.setChecked(obj.SameAsLeadIn)
+        _qty_set(self.form.leadOutDistance, obj.LeadOutDistance.Value)
         self.updateZigZagAngleEnabled(obj)
         self.updateRampFieldsEnabled(obj)
 
@@ -294,4 +332,8 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             self.form.helicalRampDiameter.editingFinished,
             self.form.minimumRampDiameter.editingFinished,
             self.form.maxRampStepdown.editingFinished,
+            self.form.useLeadInOut.clicked,
+            self.form.leadInDistance.editingFinished,
+            self.form.sameAsLeadIn.clicked,
+            self.form.leadOutDistance.editingFinished,
         ]

@@ -134,20 +134,40 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       the tool radius; with a ball/radius cutter, negative axial has its own corner-radius-based
       limit) — no input validation/clamping exists for these yet, so an extreme negative value
       could still produce a nonsensical or unsafe toolpath without any warning
-- [ ] Pocket Linking tab: **Lead-In/Lead-Out is a separate feature from ramping**, easy to conflate
-      with the ramp work already done — it's the approach/retract arc or line around the cut path
-      itself (Horizontal/Vertical Lead Radius, Sweep Angle, Linear Lead Distance, Perpendicular,
-      "Same as Lead-In"), not the plunge-entry strategy. **Design note from scoping this (not yet
-      built)**: a correct implementation isn't "insert an extra segment after the plunge lands" —
-      the plunge itself needs to target a shifted *approach point* (offset backward along the
-      first cut segment's direction by the lead distance), with the lead-in move then carrying the
-      tool from that approach point into the real path at cutting feed. Treating it as a simple
-      post-insertion (like the ramp/finishing-pass post-processing pattern) would be an
-      under-verified, potentially wrong toolpath — this needs the plunge-target adjustment done
-      properly before shipping, not a rushed version of the existing pattern. Also missing: High
-      Feedrate Mode (several rapid-vs-feed-move output strategies) + High Feedrate, Allow Rapid
-      Retract, Safe Distance, Maximum Stay-Down Distance (we have the `KeepToolDown` toggle but not
-      this limit), Lift Height
+- [x] Pocket Linking tab: **Lead-In/Lead-Out**, Linear type only. Built per the design note from
+      scoping this (preserved below) rather than a quick post-insertion: `ops/pocket.py`'s
+      `_insertLeadIn`/`_insertLeadOut` shift the plunge's own XY target backward (lead-in) or
+      extend past the final cutting point forward (lead-out) along that move's own direction,
+      then add a straight horizontal approach/exit move at cutting feed (`self.horizFeed`) —
+      resolving direction from the real adjacent command, with FreeCAD's modal X/Y/Z omission
+      handled the same way `_findFirstPlunge` already does. Verified against real generated
+      `Path.Commands`: a 3mm Lead-In correctly shifted the plunge+positioning move by exactly
+      3mm along the true first-cut direction and inserted one matching approach move; a 2mm
+      Lead-Out (independent `LeadOutDistance`, `SameAsLeadIn=False`) correctly extended the final
+      cut point by exactly 2mm along the last cut's own direction; command-count delta matched
+      exactly (+2, one insert per end) against the same op with `UseLeadInOut=False`. UI
+      enable/disable verified via real screenshots in both states, including the mutual-exclusion
+      rule below.
+      **Design note preserved from scoping (now implemented as described)**: a correct
+      implementation isn't "insert an extra segment after the plunge lands" — the plunge itself
+      needs to target a shifted *approach point* (offset backward along the first cut segment's
+      direction by the lead distance), with the lead-in move then carrying the tool from that
+      approach point into the real path at cutting feed. Treating it as a simple post-insertion
+      (like the ramp/finishing-pass pattern) would have been an under-verified, potentially wrong
+      toolpath — hence the extra design step before building it.
+      **V1 scope, stated plainly**: only the operation's single first plunge / single final
+      cutting move are treated (same single-entry-point scope as the Helix ramp, not per-level or
+      per-region); only a straight (G1) first/last move is supported — an arc (G2/G3) there is
+      skipped rather than guessing a tangent direction; **mutually exclusive with `RampType=Helix`**
+      for now (combining a shifted entry point with a spiral descent needs more design than this
+      pass did) — verified via screenshot that the checkbox visibly disables when Helix is
+      selected; not pocket-geometry-aware, same caveat as the Helix ramp (an aggressive lead
+      distance on a small pocket can shift the approach/exit point into a wall or island — a
+      user-sized value, not a verified-safe one). Still missing: the arc/radius Lead type
+      (Horizontal Lead Radius, Sweep Angle, Perpendicular), High Feedrate Mode (several
+      rapid-vs-feed-move output strategies) + High Feedrate, Allow Rapid Retract, Safe Distance,
+      Maximum Stay-Down Distance (we have the `KeepToolDown` toggle but not this limit), Lift
+      Height
 - [ ] Pocket Heights tab: FreeCAD's shared Heights+Depths pages give Clearance/Safe/Start/Final;
       Fusion's Clearance/Retract/Feed/Top/Bottom reads as having a distinct "Feed height" concept
       that may not map 1:1 — needs verification, not an assumed match

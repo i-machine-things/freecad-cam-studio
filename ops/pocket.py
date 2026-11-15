@@ -30,6 +30,14 @@ at all:
    not solid material, and are deliberately left as straight plunges for
    now -- per-level/per-region ramping is a tracked follow-up, see
    docs/ROADMAP.md.
+3. "Lead-In"/"Lead-Out" (also Fusion's Linking tab, Linear type only):
+   a separate feature from ramping -- it shifts the plunge's own XY
+   target backward off the true path by the lead distance, then adds a
+   horizontal approach move at cutting feed into the true start (mirror
+   at the tail for lead-out), so the tool is already moving in the cut
+   direction before it reaches full engagement. Mutually exclusive with
+   RampType=Helix for now (see execute()). See _applyLeadInOut's
+   docstring for the full V1 scope statement.
 """
 
 import math
@@ -147,6 +155,45 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
                 ),
             )
             obj.FinishFeedrate = 0
+        if not hasattr(obj, "UseLeadInOut"):
+            obj.addProperty(
+                "App::PropertyBool",
+                "UseLeadInOut",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Enable Lead-In/Lead-Out moves (Linear type only -- see "
+                    "docs/ROADMAP.md for the arc/radius type). Ignored when Ramp Type is "
+                    "Helix.",
+                ),
+            )
+            obj.UseLeadInOut = False
+        if not hasattr(obj, "LeadInDistance"):
+            obj.addProperty(
+                "App::PropertyDistance",
+                "LeadInDistance",
+                "Pocket",
+                QT_TRANSLATE_NOOP("App::Property", "Linear Lead-In distance"),
+            )
+            obj.LeadInDistance = 0
+        if not hasattr(obj, "SameAsLeadIn"):
+            obj.addProperty(
+                "App::PropertyBool",
+                "SameAsLeadIn",
+                "Pocket",
+                QT_TRANSLATE_NOOP("App::Property", "Use the Lead-In distance for Lead-Out too"),
+            )
+            obj.SameAsLeadIn = True
+        if not hasattr(obj, "LeadOutDistance"):
+            obj.addProperty(
+                "App::PropertyDistance",
+                "LeadOutDistance",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property", "Linear Lead-Out distance (ignored if Same as Lead-In)"
+                ),
+            )
+            obj.LeadOutDistance = 0
 
     def _customDepthParams(self, obj, strDep, finDep):
         axial = getattr(obj, "AxialStockToLeave", None)
@@ -185,8 +232,12 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         if finishingPasses > 0 and obj.ExtraOffset.Value != 0:
             self._appendFinishingPasses(obj, finishingPasses)
 
-        if getattr(obj, "RampType", "Plunge") == "Helix":
+        rampType = getattr(obj, "RampType", "Plunge")
+        if rampType == "Helix":
             self._applyHelixRampEntry(obj)
+        elif getattr(obj, "UseLeadInOut", False):
+            # Mutually exclusive with Helix for now -- see _applyLeadInOut's docstring.
+            self._applyLeadInOut(obj)
         return result
 
     def _appendFinishingPasses(self, obj, count):
@@ -358,6 +409,132 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         if abs(last["X"] - end.x) > 1e-4 or abs(last["Y"] - end.y) > 1e-4:
             cmds.append(Path.Command("G1", {"X": end.x, "Y": end.y, "Z": end.z}))
         return cmds
+
+    def _applyLeadInOut(self, obj):
+        """Fusion's Linking tab Lead-In/Lead-Out -- Linear type only (V1 scope; the arc/
+        radius type -- Horizontal Lead Radius, Sweep Angle -- is a tracked follow-up, see
+        docs/ROADMAP.md).
+
+        Design note (why this isn't a simple post-insertion like the ramp/finishing-pass
+        work above): a correct lead-in doesn't just add a move *after* the plunge lands on
+        the true path start -- it moves the plunge's own XY target backward, off the true
+        path, by the lead distance along the first cut move's own direction, then adds a
+        horizontal approach move (at cutting feed) from that shifted point into the true
+        start. That way the tool is already moving in the cut direction, at cutting feed,
+        by the time it reaches the real path, instead of plunging directly into full
+        engagement at a single point. Lead-out mirrors this at the tail: extend past the
+        true end point along the last cut move's own direction, at cutting feed, before
+        the final retract.
+
+        V1 scope, stated plainly (same honesty as the Helix ramp above):
+        - Only the operation's single first plunge / single final cutting move are
+          treated -- same single-entry-point scope as the Helix ramp, not per-level or
+          per-region.
+        - Only a straight (G1) first/last cutting move is supported; if the first move
+          after the plunge (or the last move before the final retract) is an arc (G2/G3),
+          this is skipped rather than guessing a tangent direction.
+        - Not pocket-geometry-aware -- same caveat as the helix ramp: an aggressive lead
+          distance on a small pocket can shift the approach/exit point into a wall or
+          island. This is a user-adjustable value a human must size to their geometry, not
+          one verified safe against the real pocket shape.
+        """
+        cmds = list(obj.Path.Commands)
+        leadIn = max(0.0, obj.LeadInDistance.Value)
+        sameAsLeadIn = bool(getattr(obj, "SameAsLeadIn", True))
+        leadOut = leadIn if sameAsLeadIn else max(0.0, obj.LeadOutDistance.Value)
+
+        changed = False
+        if leadIn > 0:
+            newCmds = self._insertLeadIn(cmds, leadIn)
+            if newCmds is not None:
+                cmds = newCmds
+                changed = True
+        if leadOut > 0:
+            newCmds = self._insertLeadOut(cmds, leadOut)
+            if newCmds is not None:
+                cmds = newCmds
+                changed = True
+
+        if changed:
+            obj.Path = Path.Path(cmds)
+            obj.CycleTime = PathOp.getCycleTimeEstimate(obj)
+            self.job.Proxy.getCycleTime()
+
+    def _insertLeadIn(self, cmds, leadIn):
+        found = self._findFirstPlunge(cmds)
+        if found is None:
+            return None
+        plungeIdx, start, end = found
+        nextIdx = plungeIdx + 1
+        if nextIdx >= len(cmds):
+            return None
+        nextCmd = cmds[nextIdx]
+        if nextCmd.Name not in ("G1", "G01"):
+            return None
+        p = nextCmd.Parameters
+        qx, qy = p.get("X", end.x), p.get("Y", end.y)
+        dx, dy = qx - end.x, qy - end.y
+        length = math.hypot(dx, dy)
+        if length < 1e-6:
+            return None
+        dx, dy = dx / length, dy / length
+        approachX, approachY = end.x - dx * leadIn, end.y - dy * leadIn
+
+        newCmds = list(cmds)
+        # Shift the plunge's own target XY to the approach point, so the plunge itself
+        # stays a straight vertical descent there instead of a diagonal move.
+        plungeCmd = newCmds[plungeIdx]
+        newCmds[plungeIdx] = Path.Command(
+            plungeCmd.Name, dict(plungeCmd.Parameters, X=approachX, Y=approachY)
+        )
+        # Shift the positioning move immediately before the plunge the same way, if it
+        # explicitly carries X/Y -- keeps the rapid-to-position move consistent with the
+        # shifted plunge instead of rapiding to the old XY and jumping sideways at depth.
+        if plungeIdx > 0:
+            posCmd = newCmds[plungeIdx - 1]
+            posParams = posCmd.Parameters
+            if posParams.get("X") is not None or posParams.get("Y") is not None:
+                newCmds[plungeIdx - 1] = Path.Command(
+                    posCmd.Name, dict(posParams, X=approachX, Y=approachY)
+                )
+
+        leadInMove = Path.Command("G1", {"X": end.x, "Y": end.y, "Z": end.z, "F": self.horizFeed})
+        newCmds.insert(plungeIdx + 1, leadInMove)
+        return newCmds
+
+    def _insertLeadOut(self, cmds, leadOut):
+        """Mirror of _insertLeadIn at the tail: extend past the true end point of the
+        last cutting move, along that move's own direction, before the final retract."""
+        lastCutIdx = None
+        for i in range(len(cmds) - 1, -1, -1):
+            if cmds[i].Name in ("G1", "G01", "G2", "G02", "G3", "G03"):
+                lastCutIdx = i
+                break
+        if lastCutIdx is None or lastCutIdx == 0:
+            return None
+        lastCut = cmds[lastCutIdx]
+        if lastCut.Name not in ("G1", "G01"):
+            return None
+
+        lastX = lastY = lastZ = None
+        for cmd in cmds[:lastCutIdx]:
+            p = cmd.Parameters
+            lastX = p.get("X", lastX)
+            lastY = p.get("Y", lastY)
+            lastZ = p.get("Z", lastZ)
+        p = lastCut.Parameters
+        endX, endY, endZ = p.get("X", lastX), p.get("Y", lastY), p.get("Z", lastZ)
+        if lastX is None or endX is None or lastY is None or endY is None:
+            return None
+        dx, dy = endX - lastX, endY - lastY
+        length = math.hypot(dx, dy)
+        if length < 1e-6:
+            return None
+        dx, dy = dx / length, dy / length
+        exitX, exitY = endX + dx * leadOut, endY + dy * leadOut
+
+        leadOutMove = Path.Command("G1", {"X": exitX, "Y": exitY, "Z": endZ, "F": self.horizFeed})
+        return cmds[: lastCutIdx + 1] + [leadOutMove] + cmds[lastCutIdx + 1 :]
 
 
 def Create(name, obj=None, parentJob=None):
