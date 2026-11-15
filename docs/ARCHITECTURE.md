@@ -42,9 +42,11 @@ are what this project replaces, and nothing else.
 - **File-format compatible with stock CAM.** This workbench creates/edits the exact same
   `Path::FeaturePython` objects stock CAM would. A document made in this workbench opens fine in
   vanilla FreeCAD CAM, and vice versa — we're not inventing a parallel data model. **Caveat:**
-  *opening* a document doesn't need the addon, but *editing* one of our operations does — the
-  object's `ViewObject.Proxy` points at our `pages.pocket` (etc.) module for its edit panel, and
-  vanilla FreeCAD can't import that without the addon installed.
+  *opening* a document doesn't need the addon, but *editing* or *recomputing* one of our
+  operations does. The object's `Proxy` (set in `ops/pocket.py`'s `Create`) and `ViewObject.Proxy`
+  (`pages.pocket`) both point at addon modules — vanilla FreeCAD can't import either without the
+  addon installed, so it can neither restore the data proxy nor recompute the operation (not just
+  "can't open its edit panel").
 - **Installable via FreeCAD's Addon Manager** like any other community workbench, once published.
 - **Upstream CAM improvements (bug fixes, new ops) are inherited for free** — this project only
   ever adds a new Gui layer alongside the existing one, never patches `Path/Op/*.py` or

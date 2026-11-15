@@ -44,6 +44,11 @@ import Path.Op.PocketShape as PathPocketShape
 
 
 class ObjectPocket(PathPocketShape.ObjectPocket):
+    # Hard ceiling on helix ramp segments regardless of requested RampAngle/MaxRampStepdown --
+    # see _buildHelixRampCommands. 2000 segments is already far finer than any real toolpath
+    # needs (segmentsPerTurn=36 means this is ~55 full revolutions at full resolution).
+    MAX_RAMP_SEGMENTS = 2000
+
     def areaOpFeatures(self, obj):
         # PathPocketShape.ObjectPocket.areaOpFeatures calls super(self.__class__, self) --
         # with self.__class__ being OUR subclass, that resolves to the same bound method on
@@ -198,6 +203,14 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         and concatenate the resulting commands. obj.ExtraOffset is restored to its original
         (roughing) value before returning, the same restore-after pattern areaOpShapes uses
         for AxialStockToLeave.
+
+        KNOWN INEFFICIENCY (flagged in PR #1 review, "Heavy lift" -- correctly deferred, not a
+        correctness bug): each pass reruns the *entire* clearing pattern at its new offset, not
+        just the remaining wall band. On a large pocket this means repeated full-area travel at
+        finish feed for every pass instead of a single boundary-only profile pass per step. The
+        output is correct, just slower than an ideal implementation that computed just the
+        remaining wall band/boundary profile directly -- tracked in docs/ROADMAP.md as a real
+        follow-up, not something to silently leave undocumented.
         """
         roughingCommands = list(obj.Path.Commands)
         originalOffset = obj.ExtraOffset.Value
@@ -325,6 +338,12 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         center = FreeCAD.Vector(start.x - radius, start.y, 0)
         segmentsPerTurn = 36  # 10-degree steps
         numSegments = max(4, round(totalAngle / (2 * math.pi) * segmentsPerTurn))
+        # MaxRampStepdown has no lower bound on the property itself -- a tiny value (e.g.
+        # 0.00001mm against a 10mm descent) would otherwise demand tens of millions of
+        # segments here, freezing FreeCAD / exhausting memory on an accepted input, not just
+        # a malformed one. Cap the segment count; an extreme request just gets a coarser
+        # actual stepdown than asked for instead of an unbounded synchronous allocation.
+        numSegments = min(numSegments, self.MAX_RAMP_SEGMENTS)
 
         cmds = []
         for i in range(1, numSegments + 1):

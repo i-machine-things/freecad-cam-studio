@@ -53,7 +53,9 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       `obj.FinalDepth` to the adjusted value for that one synchronous call, then restore it (safe
       even though `FinalDepth` is normally expression-driven — verified empirically that a direct
       assignment doesn't break the expression, which simply reasserts on the next real recompute).
-      Confirmed working for both positive and negative values via real toolpath Z inspection.
+      Confirmed via real toolpath Z inspection that both positive and negative values produce the
+      correct cut depth; electrode-specific negative-value edge cases are a separate, still-open
+      item below ("negative Stock to Leave").
 - [x] Pocket: ramp entry, Helix type (Fusion's Linking tab) — `PocketShape` had **no properties or
       toolpath support for this at all** (confirmed by reading `Path.Op.Area.py`). Added
       `RampType`/`RampAngle` to `ops/pocket.py`; `execute()` wraps the base class's (never
@@ -111,17 +113,27 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       `Gui::QuantitySpinBox` approach silently displays mm/s instead, a real 60x unit-confusion
       risk for a feed rate, not merely cosmetic). Verified end-to-end: command count scales
       correctly, finish feed only applies to the appended finishing commands, `ExtraOffset`
-      restored correctly, UI round-trips mm/min correctly. **Not yet built**: per-pass Stepover,
+      restored correctly, UI round-trips mm/min correctly. **Known inefficiency (PR #1 review,
+      "Heavy lift," correctly deferred — not a correctness bug)**: each finishing pass reruns the
+      *entire* clearing pattern at its new offset instead of generating just the remaining wall
+      band/boundary profile, so a large pocket repeats full-area travel at finish feed per pass
+      rather than one efficient boundary-only pass per step. Output is correct, just slower than
+      an ideal implementation. **Not yet built**: per-pass Stepover,
       "Leads on all Finishing Passes," Repeat Finishing Pass, Finishing Overlap. Also missing: Minimum
       Cutting Radius (corner blending), Both Ways (alternating climb/conventional with its own
       Optimal-Load/Feedrate), Use Morphed Spiral Machining, Allow Stepover Cusps, Use Even
       Stepdowns, Order by Depth, Order by Step, Preserve Order, general Smoothing + Smoothing
       Deviation, and a **Feed Optimization** corner-slowdown subsystem (Maximum Directional
       Change, Reduced Feed Radius/Distance/Feedrate, Only Inner Corners)
-- [ ] Pocket Passes tab: **negative Stock to Leave** (radial and axial) for electrode/spark-gap
-      machining — Fusion explicitly supports negative values here; not yet verified whether our
-      `ExtraOffset`/`AxialStockToLeave` properties and the underlying area-clearing call tolerate
-      negative input correctly or would silently misbehave
+- [x] Pocket Passes tab: **negative Stock to Leave** (radial and axial) for electrode/spark-gap
+      machining — Fusion explicitly supports negative values here. Verified what the depth-fix
+      work above checked: negative `ExtraOffset` and `AxialStockToLeave` both recompute without
+      error and produce the correct, expected Z depth in real `Path.Commands` (e.g. `-0.5` axial
+      correctly cuts to 9.5mm against a 10mm default). **Not verified**: electrode-specific edge
+      cases Autodesk's own reference calls out (e.g. a negative radial value must stay less than
+      the tool radius; with a ball/radius cutter, negative axial has its own corner-radius-based
+      limit) — no input validation/clamping exists for these yet, so an extreme negative value
+      could still produce a nonsensical or unsafe toolpath without any warning
 - [ ] Pocket Linking tab: **Lead-In/Lead-Out is a separate feature from ramping**, easy to conflate
       with the ramp work already done — it's the approach/retract arc or line around the cut path
       itself (Horizontal/Vertical Lead Radius, Sweep Angle, Linear Lead Distance, Perpendicular,
