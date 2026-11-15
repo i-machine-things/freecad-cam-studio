@@ -43,6 +43,7 @@ at all:
 import math
 
 import FreeCAD
+import Part
 from PySide.QtCore import QT_TRANSLATE_NOOP
 
 import Path
@@ -59,6 +60,17 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
     # already far more than any real single-entry ramp needs.
     MAX_RAMP_REVOLUTIONS = 50
     MAX_RAMP_SEGMENTS = 2000
+
+    # Slack (mm) allowed when checking an added entry/exit move's swept cutter area against
+    # the pocket -- see _sweptAreaFits. The stock toolpath itself legitimately runs the
+    # cutter tangent to the walls, so an exact-radius check would reject on numerical noise.
+    FIT_TOLERANCE = 0.01
+    # Directions (radians, from the plunge point toward the helix center) tried in order
+    # when placing a helix ramp. pi first: the original fixed placement, so a helix that
+    # already fit keeps exactly the same output.
+    HELIX_CENTER_DIRECTIONS = tuple(
+        math.pi * k / 4.0 for k in (4, 0, 2, 6, 3, 5, 1, 7)
+    )
 
     def areaOpFeatures(self, obj):
         # PathPocketShape.ObjectPocket.areaOpFeatures calls super(self.__class__, self) --
@@ -229,7 +241,16 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
     def execute(self, obj):
         # Path.Op.Base.execute's own docstring says "do not overwrite!" -- let it build the
         # correct, normal (straight-plunge) toolpath first, then post-process the result.
+        # Base.execute returns early *without* assigning obj.Path (missing/zero tool
+        # controller, invalid base/stock) or with a placeholder path (inactive op). In all of
+        # those cases it never reaches `self.commandlist = []`, so obj.Path is not a fresh
+        # toolpath and must not be post-processed -- re-running the lead/ramp steps on the
+        # previous, already post-processed path would shift and re-insert moves again on
+        # every recompute (CodeRabbit, PR #1).
+        self.commandlist = None
         result = super().execute(obj)
+        if self.commandlist is None:
+            return result
 
         finishingPasses = int(getattr(obj, "FinishingPasses", 0))
         if finishingPasses > 0 and obj.ExtraOffset.Value != 0:
@@ -294,6 +315,16 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         params["F"] = feed
         return Path.Command(cmd.Name, params)
 
+    @staticmethod
+    def _withFeed(params, feed):
+        """Add F to `params` only when the tool controller actually has a feed set. The
+        stock generator omits F entirely for an unset (0) feed; emitting an explicit F0 on
+        just our added moves would be inconsistent with their neighbors and is a hard
+        error or a stall on some controllers."""
+        if feed and feed > 0:
+            params["F"] = feed
+        return params
+
     def _applyHelixRampEntry(self, obj):
         if not obj.Path or not obj.Path.Commands:
             return
@@ -303,9 +334,17 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             return
         plungeIdx, start, end = found
 
-        radius = self._helixRampRadius(obj)
+        placement = self._fitHelixRamp(obj, end)
+        if placement is None:
+            Path.Log.warning(
+                "%s: no helix ramp between the Helical Ramp Diameter and the Minimum Ramp "
+                "Diameter fits inside the pocket at the entry point -- keeping the straight "
+                "plunge. Reduce the ramp diameters or use a smaller tool.\n" % obj.Label
+            )
+            return
+        radius, centerAngle = placement
         rampCmds = self._buildHelixRampCommands(
-            start, end, radius, obj.RampAngle.Value, obj.MaxRampStepdown.Value
+            start, end, radius, obj.RampAngle.Value, obj.MaxRampStepdown.Value, centerAngle
         )
         if not rampCmds:
             return
@@ -318,23 +357,94 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         obj.CycleTime = PathOp.getCycleTimeEstimate(obj)
         self.job.Proxy.getCycleTime()
 
-    def _helixRampRadius(self, obj):
-        """Resolve the actual helix radius from HelicalRampDiameter/MinimumRampDiameter.
-
-        SAFETY CAVEAT (flagged in PR #1 review, tracked in docs/ROADMAP.md): this value is
-        NOT checked against the pocket's actual boundary or islands -- we don't have that
-        geometry at this post-process stage (see module docstring). On a small pocket, a
-        too-large helix can swing the cutter into a wall. This is a user-adjustable value a
-        human must size sensibly for their geometry, not an automatically pocket-aware or
-        safety-verified one. Real fix (rejecting Helix when nothing fits) needs the pocket's
-        2D shape available here, which it currently isn't."""
+    def _helixRampDiameters(self, obj):
+        """Candidate helix diameters, largest (preferred) first: HelicalRampDiameter (0 =
+        auto, 1.5x tool diameter), then -- only if MinimumRampDiameter is set and smaller --
+        evenly stepped down to MinimumRampDiameter. A minimum larger than the target raises
+        the target to it, as before."""
         target = obj.HelicalRampDiameter.Value
         if target <= 0:
             target = self.tool.Diameter.Value * 1.5
         minimum = obj.MinimumRampDiameter.Value
-        if minimum > 0:
-            target = max(target, minimum)
-        return target / 2.0
+        if minimum >= target:
+            return [minimum]
+        if minimum <= 0:
+            return [target]
+        steps = 4
+        return [target - (target - minimum) * i / steps for i in range(steps + 1)]
+
+    def _fitHelixRamp(self, obj, entry):
+        """Return (radius, centerAngle) for the first helix that fits inside the pocket at
+        `entry` (the plunge's landing point), or None if none does.
+
+        Pocket-geometry-aware (closes the PR #1 review finding that an unchecked helix can
+        swing the cutter into a wall or island on a small pocket): the disc the cutter
+        sweeps -- helix radius + tool radius + radial Stock to Leave, around the helix
+        center -- must lie inside the pocket's removal solid. Tries each candidate diameter
+        (largest first) in each of HELIX_CENTER_DIRECTIONS around the entry point. Checking
+        the full disc rather than the annulus actually swept is deliberately conservative:
+        it also refuses to spiral around an island smaller than the helix's inner bore."""
+        clearance = self.tool.Diameter.Value / 2.0 + obj.ExtraOffset.Value
+        for diameter in self._helixRampDiameters(obj):
+            radius = diameter / 2.0
+            if radius <= 0:
+                continue
+            for centerAngle in self.HELIX_CENTER_DIRECTIONS:
+                center = (
+                    entry.x + radius * math.cos(centerAngle),
+                    entry.y + radius * math.sin(centerAngle),
+                )
+                if self._sweptAreaFits([center], radius + clearance, entry.z):
+                    return radius, centerAngle
+        return None
+
+    def _sweptAreaFits(self, points, radius, z):
+        """True if a disc of `radius` swept along the straight XY segments joining `points`
+        (a single point = just the disc) stays inside one of the pocket's removal solids
+        at height `z`.
+
+        The removal solids are the ones PocketShape.areaOpShapes built for this very
+        execute() (upstream keeps them on `self.removalshapes`): the exact volume the
+        operation is allowed to cut, with walls as its sides and islands as holes through
+        it. A thin slab of the swept area is cut against each solid; anything left over is
+        cutter outside the pocket. `radius` must already include any radial Stock to Leave.
+        Returns False (does not fit) when there is nothing to check against -- an unverified
+        move is treated as unsafe, not waved through."""
+        radius = max(radius - self.FIT_TOLERANCE, self.FIT_TOLERANCE)
+        for tup in getattr(self, "removalshapes", None) or []:
+            solid, isHole = tup[0], tup[1]
+            if isHole or solid.isNull():
+                continue
+            bb = solid.BoundBox
+            height = min(0.1, bb.ZLength / 2.0)
+            if height <= 0:
+                continue
+            z0 = max(bb.ZMin, min(z, bb.ZMax - height))
+            parts = self._sweptSlabParts(points, radius, z0, height)
+            if all(part.cut(solid).Volume <= part.Volume * 1e-6 for part in parts):
+                return True
+        return False
+
+    def _sweptSlabParts(self, points, radius, z0, height):
+        """The swept area as simple solids (a cylinder per point, a box per segment) whose
+        union is the sweep -- the union fits iff every part does, so no fuse is needed."""
+        up = FreeCAD.Vector(0, 0, height)
+        parts = [
+            Part.makeCylinder(radius, height, FreeCAD.Vector(x, y, z0)) for x, y in points
+        ]
+        for (ax, ay), (bx, by) in zip(points, points[1:]):
+            length = math.hypot(bx - ax, by - ay)
+            if length < 1e-6:
+                continue
+            nx, ny = -(by - ay) / length * radius, (bx - ax) / length * radius
+            corners = [
+                FreeCAD.Vector(ax + nx, ay + ny, z0),
+                FreeCAD.Vector(bx + nx, by + ny, z0),
+                FreeCAD.Vector(bx - nx, by - ny, z0),
+                FreeCAD.Vector(ax - nx, ay - ny, z0),
+            ]
+            parts.append(Part.Face(Part.makePolygon(corners + corners[:1])).extrude(up))
+        return parts
 
     def _findFirstPlunge(self, cmds):
         """Return (index, start, end) for the first straight vertical plunge (G1, same X/Y
@@ -364,15 +474,18 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             lastX, lastY, lastZ = x, y, z
         return None
 
-    def _buildHelixRampCommands(self, start, end, radius, rampAngleDeg, maxStepdown=0.0):
+    def _buildHelixRampCommands(
+        self, start, end, radius, rampAngleDeg, maxStepdown=0.0, centerAngle=math.pi
+    ):
         """Build a helix descending from `start` to `end` (same X/Y, start.z > end.z) as
         directly-sampled G1 segments, plus a short closing move back to `end`'s exact X/Y
         so the rest of the already-generated toolpath still connects correctly.
 
-        The helix circles a center point offset from the entry point by `radius`, so the
-        entry point itself sits exactly on the circle at angle 0 -- the tool starts cutting
-        from right where the original straight plunge was, just descending on a spiral
-        instead of straight down.
+        The helix circles a center point offset from the entry point by `radius` in the
+        `centerAngle` direction (chosen by _fitHelixRamp so the helix stays inside the
+        pocket; default pi = toward -X), so the entry point itself sits exactly on the
+        circle -- the tool starts cutting from right where the original straight plunge
+        was, just descending on a spiral instead of straight down.
 
         `maxStepdown`, if positive, caps the descent per revolution (Fusion's "Maximum Ramp
         Stepdown" -- constrains tool load during full-width ramping cuts) by using more,
@@ -404,7 +517,11 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         if totalAngle > maxTotalAngle:
             totalAngle = maxTotalAngle
 
-        center = FreeCAD.Vector(start.x - radius, start.y, 0)
+        center = FreeCAD.Vector(
+            start.x + radius * math.cos(centerAngle), start.y + radius * math.sin(centerAngle), 0
+        )
+        # Angular position of the entry point on the circle, as seen from the center.
+        entryAngle = centerAngle + math.pi
         segmentsPerTurn = 36  # 10-degree steps
         numSegments = max(4, round(totalAngle / (2 * math.pi) * segmentsPerTurn))
         # Secondary safety net -- should rarely bind now that totalAngle itself is bounded
@@ -414,11 +531,11 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         cmds = []
         for i in range(1, numSegments + 1):
             t = i / numSegments
-            angle = t * totalAngle
+            angle = entryAngle + t * totalAngle
             x = center.x + radius * math.cos(angle)
             y = center.y + radius * math.sin(angle)
             z = start.z - t * height
-            cmds.append(Path.Command("G1", {"X": x, "Y": y, "Z": z, "F": self.vertFeed}))
+            cmds.append(Path.Command("G1", self._withFeed({"X": x, "Y": y, "Z": z}, self.vertFeed)))
 
         last = cmds[-1].Parameters
         if abs(last["X"] - end.x) > 1e-4 or abs(last["Y"] - end.y) > 1e-4:
@@ -448,34 +565,56 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         - Only a straight (G1) first/last cutting move is supported; if the first move
           after the plunge (or the last move before the final retract) is an arc (G2/G3),
           this is skipped rather than guessing a tangent direction.
-        - Not pocket-geometry-aware -- same caveat as the helix ramp: an aggressive lead
-          distance on a small pocket can shift the approach/exit point into a wall or
-          island. This is a user-adjustable value a human must size to their geometry, not
-          one verified safe against the real pocket shape.
+        - Pocket-geometry-aware by rejection, not by adaptation: each lead's swept cutter
+          area (tool radius + the radial Stock to Leave in force for that move) is checked
+          against the pocket's walls and islands (_sweptAreaFits). A lead that does not
+          fit is left out entirely, with a warning -- it is not shortened or re-aimed.
         """
         cmds = list(obj.Path.Commands)
         leadIn = max(0.0, obj.LeadInDistance.Value)
         sameAsLeadIn = bool(getattr(obj, "SameAsLeadIn", True))
         leadOut = leadIn if sameAsLeadIn else max(0.0, obj.LeadOutDistance.Value)
 
+        toolRadius = self.tool.Diameter.Value / 2.0
+        stockToLeave = obj.ExtraOffset.Value
+        # The first plunge always belongs to the roughing pass. The last cutting move
+        # belongs to the final finishing pass when finishing passes ran (see execute()),
+        # and that pass cuts at the true wall -- no radial stock left.
+        finished = int(getattr(obj, "FinishingPasses", 0)) > 0 and stockToLeave != 0
+        leadInClearance = toolRadius + stockToLeave
+        leadOutClearance = toolRadius + (0.0 if finished else stockToLeave)
+
         changed = False
         if leadIn > 0:
-            newCmds = self._insertLeadIn(cmds, leadIn)
+            newCmds = self._insertLeadIn(cmds, leadIn, leadInClearance)
             if newCmds is not None:
                 cmds = newCmds
                 changed = True
+            else:
+                self._warnLeadSkipped(obj, "Lead-In")
         if leadOut > 0:
-            newCmds = self._insertLeadOut(cmds, leadOut)
+            newCmds = self._insertLeadOut(cmds, leadOut, leadOutClearance)
             if newCmds is not None:
                 cmds = newCmds
                 changed = True
+            else:
+                self._warnLeadSkipped(obj, "Lead-Out")
 
         if changed:
             obj.Path = Path.Path(cmds)
             obj.CycleTime = PathOp.getCycleTimeEstimate(obj)
             self.job.Proxy.getCycleTime()
 
-    def _insertLeadIn(self, cmds, leadIn):
+    def _warnLeadSkipped(self, obj, which):
+        Path.Log.warning(
+            "%s: %s left out -- it does not fit inside the pocket at that distance, or the "
+            "adjacent move is not a straight cut it can be aligned to.\n" % (obj.Label, which)
+        )
+
+    def _insertLeadIn(self, cmds, leadIn, clearance):
+        """Return `cmds` with a linear lead-in of length `leadIn` added at the first
+        plunge, or None if it can't be added safely. `clearance` is the radius the cutter
+        must keep clear around its center (tool radius + radial stock to leave)."""
         found = self._findFirstPlunge(cmds)
         if found is None:
             return None
@@ -494,32 +633,57 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             return None
         dx, dy = dx / length, dy / length
         approachX, approachY = end.x - dx * leadIn, end.y - dy * leadIn
+        if not self._sweptAreaFits([(approachX, approachY), (end.x, end.y)], clearance, end.z):
+            return None
+
+        # The tool has to be over the approach point *before* it starts descending, so every
+        # rapid that positions it over the old plunge point has to move with it -- not just
+        # the command right before the plunge. Stock output is e.g. `G0 X Y` (at clearance)
+        # then `G0 X Y Z<safe>` then the plunge; a post-processed or hand-built path may
+        # instead omit modal X/Y on the descent (`G0 X Y`, `G0 Z<safe>`). Walk back over the
+        # whole run of rapids ending on the plunge point and retarget each one that carries
+        # X/Y; Z-only ones need no change. Stop at the first move that goes anywhere else.
+        posIdxs = []
+        for i in range(plungeIdx - 1, -1, -1):
+            cmd = cmds[i]
+            if cmd.Name not in ("G0", "G00"):
+                break
+            params = cmd.Parameters
+            if "X" not in params and "Y" not in params:
+                continue
+            if (
+                abs(params.get("X", start.x) - start.x) > 1e-6
+                or abs(params.get("Y", start.y) - start.y) > 1e-6
+            ):
+                break
+            posIdxs.append(i)
+        # Nothing to retarget means the tool reaches the plunge point some other way (e.g. a
+        # feed move) -- not a layout this was designed or verified for, so decline instead
+        # of leaving a diagonal descent.
+        if not posIdxs:
+            return None
 
         newCmds = list(cmds)
+        for i in posIdxs:
+            newCmds[i] = Path.Command(
+                cmds[i].Name, dict(cmds[i].Parameters, X=approachX, Y=approachY)
+            )
         # Shift the plunge's own target XY to the approach point, so the plunge itself
         # stays a straight vertical descent there instead of a diagonal move.
         plungeCmd = newCmds[plungeIdx]
         newCmds[plungeIdx] = Path.Command(
             plungeCmd.Name, dict(plungeCmd.Parameters, X=approachX, Y=approachY)
         )
-        # Shift the positioning move immediately before the plunge the same way, if it
-        # explicitly carries X/Y -- keeps the rapid-to-position move consistent with the
-        # shifted plunge instead of rapiding to the old XY and jumping sideways at depth.
-        if plungeIdx > 0:
-            posCmd = newCmds[plungeIdx - 1]
-            posParams = posCmd.Parameters
-            if posParams.get("X") is not None or posParams.get("Y") is not None:
-                newCmds[plungeIdx - 1] = Path.Command(
-                    posCmd.Name, dict(posParams, X=approachX, Y=approachY)
-                )
-
-        leadInMove = Path.Command("G1", {"X": end.x, "Y": end.y, "Z": end.z, "F": self.horizFeed})
+        leadInMove = Path.Command(
+            "G1", self._withFeed({"X": end.x, "Y": end.y, "Z": end.z}, self.horizFeed)
+        )
         newCmds.insert(plungeIdx + 1, leadInMove)
         return newCmds
 
-    def _insertLeadOut(self, cmds, leadOut):
+    def _insertLeadOut(self, cmds, leadOut, clearance):
         """Mirror of _insertLeadIn at the tail: extend past the true end point of the
-        last cutting move, along that move's own direction, before the final retract."""
+        last cutting move, along that move's own direction, before the final retract.
+        Returns None if it can't be added safely (see _insertLeadIn)."""
         lastCutIdx = None
         for i in range(len(cmds) - 1, -1, -1):
             if cmds[i].Name in ("G1", "G01", "G2", "G02", "G3", "G03"):
@@ -547,8 +711,14 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             return None
         dx, dy = dx / length, dy / length
         exitX, exitY = endX + dx * leadOut, endY + dy * leadOut
+        if endZ is None or not self._sweptAreaFits(
+            [(endX, endY), (exitX, exitY)], clearance, endZ
+        ):
+            return None
 
-        leadOutMove = Path.Command("G1", {"X": exitX, "Y": exitY, "Z": endZ, "F": self.horizFeed})
+        leadOutMove = Path.Command(
+            "G1", self._withFeed({"X": exitX, "Y": exitY, "Z": endZ}, self.horizFeed)
+        )
         return cmds[: lastCutIdx + 1] + [leadOutMove] + cmds[lastCutIdx + 1 :]
 
 

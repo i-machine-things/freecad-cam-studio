@@ -67,12 +67,17 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       has **seven** Ramp Type options, not five — Plunge, Plunge Outside Stock, Zig-Zag, Profile,
       Smooth Profile, Predrill, Helix. Only Helix is built. Added (next commit) `HelicalRampDiameter`
       / `MinimumRampDiameter` (user-adjustable now, default 1.5x tool diameter) and
-      `MaxRampStepdown`, but **these are not pocket-geometry-aware** — CodeRabbit correctly flagged
-      (PR #1) that a helix sized without checking the actual pocket boundary/islands can swing the
-      cutter into a wall on a small pocket. Real fix needs the pocket's 2D shape at the
-      post-process stage (not available there today) to check the swept area against walls/islands
-      and reject Helix if nothing fits — a "Heavy lift," correctly deferred, not silently skipped;
-      until then this is a user-adjustable-but-unchecked value, documented as such in the code.
+      `MaxRampStepdown`. **Now pocket-geometry-aware** (CodeRabbit flagged on PR #1 that an unchecked
+      helix can swing the cutter into a wall on a small pocket; first deferred on the belief that
+      the pocket shape wasn't available at the post-process stage — it is: upstream leaves this
+      execute's removal solids on `self.removalshapes`). `_fitHelixRamp` checks the disc the
+      cutter sweeps (helix radius + tool radius + radial Stock to Leave) against those solids —
+      walls are their sides, islands are holes through them — trying each diameter from
+      `HelicalRampDiameter` stepped down to `MinimumRampDiameter`, in 8 directions around the
+      entry point (the original fixed direction first, so a helix that already fit is unchanged).
+      If nothing fits, the straight plunge is kept and a warning is logged. Verified on real
+      `Path.Commands` against an independent 2D distance-to-wall/island check, with the pre-fix
+      code as a negative control.
       Still missing: **Ramp Clearance Height**, **Ramp Taper Angle** (conical helix, distinct from
       Ramping Angle), and per-level/per-region ramping (every plunge, not just the first).
 - [x] Tool selection: Fusion's "Select..." tool-library browser, added alongside the existing
@@ -161,9 +166,18 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       skipped rather than guessing a tangent direction; **mutually exclusive with `RampType=Helix`**
       for now (combining a shifted entry point with a spiral descent needs more design than this
       pass did) — verified via screenshot that the checkbox visibly disables when Helix is
-      selected; not pocket-geometry-aware, same caveat as the Helix ramp (an aggressive lead
-      distance on a small pocket can shift the approach/exit point into a wall or island — a
-      user-sized value, not a verified-safe one). Still missing: the arc/radius Lead type
+      selected. **Pocket-geometry-aware by rejection** (PR #1 review): each lead's swept cutter
+      area — tool radius plus the radial Stock to Leave in force for that move (roughing stock for
+      the lead-in; none for a lead-out that follows finishing passes) — is checked against the
+      same removal solids as the Helix ramp, and a lead that doesn't fit is left out with a
+      warning rather than shortened or re-aimed. On an Offset-pattern pocket this means the
+      lead-out is normally rejected: the last cut runs along a wall into a corner, so there is
+      nowhere straight ahead to exit — a tangential/arc exit needs the arc Lead type below.
+      Also fixed in the same review: every rapid positioning the tool over the old plunge point is
+      retargeted to the approach point (not only the command right before the plunge), so no
+      descent is diagonal, including when a Z-only rapid precedes the plunge; and nothing is
+      post-processed when the base `execute()` bails out early without producing a new path.
+      Still missing: the arc/radius Lead type
       (Horizontal Lead Radius, Sweep Angle, Perpendicular), High Feedrate Mode (several
       rapid-vs-feed-move output strategies) + High Feedrate, Allow Rapid Retract, Safe Distance,
       Maximum Stay-Down Distance (we have the `KeepToolDown` toggle but not this limit), Lift
