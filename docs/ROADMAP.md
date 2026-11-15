@@ -19,9 +19,13 @@ Adaptive/Drilling`). This phase is a new Gui layer only — no new toolpath engi
       ViewProvider unmodified (Job-level editing isn't part of this project's scope, only
       operation TaskPanels are)
 - [x] First operation command: `CamStudio_Pocket` — creates the same `PocketShape.ObjectPocket`
-      object stock CAM's "Pocket Shape" command creates, via our own toolbar entry/icon. Currently
-      reuses stock CAM's own `TaskPanelOpPage` for the edit dialog as a placeholder — swapping in
-      CAM Studio's own Fusion-style page layout is the next step
+      object stock CAM's "Pocket Shape" command creates, via our own toolbar entry/icon
+- [x] CAM Studio's own Pocket edit dialog (`pages/pocket.py`) — built from scratch (no FreeCAD
+      `.ui` resource reused), grouped and labeled to match Fusion's 2D Pocket dialog terminology
+      ("Tool" / "Passes" / "Other Options", "Pocket Pattern", "Cutting Direction", "Stepover",
+      "Stock to Leave") instead of FreeCAD's own layout. Shared Heights/Depths/Geometry pages are
+      still the generic FreeCAD ones (their terminology already closely matches Fusion's Heights
+      tab, so no gap to close there)
 - [ ] Build the Setup → Operations tree UI (PySide/Qt) matching the workflow sequence from the spec
 - [ ] Parameter dialogs for the Phase 1 operation set, backed by the existing `Path.Op.*` objects'
       own properties (no new property schema)

@@ -56,9 +56,32 @@ are what this project replaces, and nothing else.
    each operation's existing properties using the Setup → Operations tree structure and dialog
    organization described in `docs/spec/`, instead of stock CAM's own panel layout.
 
-## Open item before implementation starts
+## Resolved: how the edit/double-click swap actually works
 
-Need a short spike on how an external addon registers a replacement `TaskPanel` for an existing
-op's double-click/"edit" behavior (versus just adding new "create" commands, which is
-straightforward). Not yet verified against FreeCAD's ViewProvider/command dispatch — check this
-before committing to the Phase 1 task-panel work in the roadmap.
+(Previously an open item — verified by reading `Path/Op/Gui/Base.py` and building/running a real
+command against it.)
+
+FreeCAD doesn't dispatch edit-on-double-click by object *type* through a central registry — it's
+per-instance. Every `Path.Op.*` object's `obj.ViewObject.Proxy` is one *generic*
+`Path.Op.Gui.Base.ViewProvider` class (the same class for every operation type), parameterized by
+a small resource bundle (`Base.py`'s `CommandResources`) that names which `TaskPanelOpPage`
+subclass to plug into the shared `TaskPanel` controller (`Base.py`'s generic `TaskPanel` class,
+which assembles our op-specific page alongside shared pages like Base Geometry/Heights/Depths/
+Tool Controller — those shared pages' own FreeCAD terminology already closely matches Fusion's
+Heights tab, so they're reused as-is rather than rebuilt).
+
+That `ViewObject.Proxy` assignment happens exactly once, at creation time, inside whichever
+`Command.Create()` built the object (`Base.py`'s `Create(res)` function, called from
+`CommandPathOp.Activated()`). We don't touch `Path/Op/Gui/*.py` at all — `commands/create_pocket.py`
+builds its own `CommandResources` pointing `opPageClass` at `pages/pocket.py`'s own
+`TaskPanelOpPage` (built from scratch in Python, no FreeCAD `.ui` resource reused) and registers
+its own `Gui.addCommand(...)` entry. Objects our commands create open in our UI on double-click;
+objects stock CAM's commands create keep opening in stock CAM's UI. Fully additive — no core
+patch, no subclassing `ViewProvider` itself needed. See `pages/pocket.py` for the first concrete
+example of this pattern (Fusion-style grouping/terminology, wired to the same underlying
+`PocketShape.ObjectPocket` properties stock CAM's own panel edits).
+
+**Not yet covered** (not required for Phase 1, flagged for later): making a *pre-existing*,
+stock-CAM-created object open in our UI instead would require reassigning its `ViewObject.Proxy`
+post-hoc (e.g. on document load) — not attempted yet, since Phase 1's plan is new jobs created
+through our own commands, not re-skinning documents that already exist.
