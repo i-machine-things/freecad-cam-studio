@@ -47,6 +47,19 @@ def _qty_set(widget, value):
     widget.setProperty("rawValue", value)
 
 
+def _feed_display_unit():
+    """(unit label, mm/s per display unit, decimals) for a feed-rate field: always per
+    minute -- the CNC convention -- in the length system the user's unit schema displays
+    every other field on the page in. Under an imperial schema that's in/min, so a feed
+    doesn't sit in mm/min beside distances shown in inches."""
+    lengthUnit = FreeCAD.Units.Quantity(1.0, FreeCAD.Units.Length).getUserPreferred()[2]
+    if lengthUnit in ("in", "ft", "thou", "yd", "mi"):
+        unit, decimals = "in/min", 3
+    else:
+        unit, decimals = "mm/min", 2
+    return unit, FreeCAD.Units.Quantity("1 " + unit).Value, decimals
+
+
 class TaskPanelOpPage(PathOpGui.TaskPanelPage):
     """Page controller for CAM Studio's Pocket command (PocketShape.ObjectPocket)."""
 
@@ -95,11 +108,13 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         # "mm/min" directly onto the widget is silently ignored (falls back to mm/s) -- a real
         # 60x unit-confusion risk for a feed rate, not just cosmetic. Converting explicitly in
         # getFields/setFields (FinishFeedrate's own internal unit is mm/s) avoids relying on
-        # that preference at all, regardless of what any particular install has it set to.
+        # that widget at all. The display unit still follows the user's unit schema, via
+        # _feed_display_unit: per minute always, mm or inch to match the other fields.
+        feedUnit, form.finishFeedScale, feedDecimals = _feed_display_unit()
         form.finishFeedrate = QtWidgets.QDoubleSpinBox()
         form.finishFeedrate.setRange(0, 100000)
-        form.finishFeedrate.setDecimals(2)
-        form.finishFeedrate.setSuffix(" mm/min")
+        form.finishFeedrate.setDecimals(feedDecimals)
+        form.finishFeedrate.setSuffix(" " + feedUnit)
         passes_layout.addRow(translate("CamStudio_Pocket", "Pocket Pattern"), form.clearingPattern)
         passes_layout.addRow(translate("CamStudio_Pocket", "Cutting Direction"), form.cutMode)
         passes_layout.addRow(translate("CamStudio_Pocket", "Stepover"), form.stepOverPercent)
@@ -251,8 +266,13 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             obj.UseRestMachining = self.form.useRestMachining.isChecked()
         if obj.FinishingPasses != self.form.finishingPasses.value():
             obj.FinishingPasses = self.form.finishingPasses.value()
-        finishFeedMmPerSec = self.form.finishFeedrate.value() / 60.0
-        if obj.FinishFeedrate.Value != finishFeedMmPerSec:
+        # Only write back a real edit: the widget shows a rounded value, so comparing exactly
+        # would overwrite the stored feed with its rounded display form whenever any other
+        # field on the page changed.
+        scale = self.form.finishFeedScale
+        finishFeedMmPerSec = self.form.finishFeedrate.value() * scale
+        resolution = 10.0 ** -self.form.finishFeedrate.decimals() * scale
+        if abs(obj.FinishFeedrate.Value - finishFeedMmPerSec) > resolution / 2.0:
             obj.FinishFeedrate = finishFeedMmPerSec
         if obj.UseOutline != self.form.useOutline.isChecked():
             obj.UseOutline = self.form.useOutline.isChecked()
@@ -292,7 +312,7 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         self.form.minTravel.setChecked(obj.MinTravel)
         self.form.useRestMachining.setChecked(obj.UseRestMachining)
         self.form.finishingPasses.setValue(obj.FinishingPasses)
-        self.form.finishFeedrate.setValue(obj.FinishFeedrate.Value * 60.0)
+        self.form.finishFeedrate.setValue(obj.FinishFeedrate.Value / self.form.finishFeedScale)
         self.form.useOutline.setChecked(obj.UseOutline)
         self.form.useStartPoint.setChecked(obj.UseStartPoint)
         self.selectInComboBox(obj.RampType, self.form.rampType)
