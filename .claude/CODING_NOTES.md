@@ -5,6 +5,7 @@
 ## FreeCAD CAM API accuracy
 
 - FreeCAD CAM class names can be misleading by similarity, not just by absence. `Path/Op/Pocket.py`'s `ObjectPocket` is the **3D** Pocket op (`FeatureNoFinalDepth`, final depth not editable) — the 2.5D, shape-based Pocket with editable final depth is `Path/Op/PocketShape.py`. Verify against the actual pinned FreeCAD version's source (`raw.githubusercontent.com/FreeCAD/FreeCAD/<tag>/...`) before citing a class in spec/architecture docs — filename pattern-matching isn't enough.
+- When adding a depth/geometry-affecting property via a documented hook like `_customDepthParams`, that hook may only feed the Z-level *iteration list* — the actual removal-shape *geometry* (`areaOpShapes`) can read the raw, unadjusted property directly and ignore it entirely. `AxialStockToLeave` shipped "verified" once by checking only `_customDepthParams`'s own return value — it silently did nothing to the real toolpath. Always verify a depth/geometry change against the actual generated `Path.Commands` Z values, never just the intermediate function that's supposed to feed them.
 
 ## Doc hygiene
 

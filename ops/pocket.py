@@ -126,6 +126,29 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         adjustedFinalDepth = finDep + (axial.Value if axial else 0.0)
         return super()._customDepthParams(obj, strDep, adjustedFinalDepth)
 
+    def areaOpShapes(self, obj):
+        # _customDepthParams (above) only adjusts the Z-level *iteration list* used to slice
+        # the removal shape into passes -- PocketShape.areaOpShapes itself reads
+        # obj.FinalDepth.Value directly to build that removal shape's actual geometry
+        # (translate/extrude), completely independent of _customDepthParams. Without this,
+        # AxialStockToLeave would adjust the depth-stepping metadata but never actually change
+        # the real cut depth -- caught by checking the generated toolpath's Z values, not just
+        # that _customDepthParams returned the right number.
+        #
+        # FinalDepth is normally expression-driven (bound to OpFinalDepth), but a direct
+        # assignment still works and is safely overwritten back by the expression on the next
+        # real recompute -- verified empirically. Restore it immediately after this synchronous
+        # call regardless, so nothing outside this method ever observes the adjusted value.
+        axial = getattr(obj, "AxialStockToLeave", None)
+        if not axial or axial.Value == 0:
+            return super().areaOpShapes(obj)
+        original = obj.FinalDepth.Value
+        obj.FinalDepth = original + axial.Value
+        try:
+            return super().areaOpShapes(obj)
+        finally:
+            obj.FinalDepth = original
+
     def execute(self, obj):
         # Path.Op.Base.execute's own docstring says "do not overwrite!" -- let it build the
         # correct, normal (straight-plunge) toolpath first, then post-process the result.

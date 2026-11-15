@@ -41,9 +41,19 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       FreeCAD ones (their terminology already closely matches Fusion's Heights tab, so no gap to
       close there)
 - [x] Pocket: Radial + Axial Stock to Leave (`ops/pocket.py`'s `ObjectPocket` subclass) — stock
-      CAM's `PocketShape` only has one (`ExtraOffset`, radial). Added `AxialStockToLeave` as a real
-      new property wired into `_customDepthParams` (an officially documented extension point),
-      verified to actually shift the computed toolpath depth, not just hold a UI value
+      CAM's `PocketShape` only has one (`ExtraOffset`, radial). Added `AxialStockToLeave`, wired
+      into `_customDepthParams` (an officially documented extension point) **and** `areaOpShapes`
+      (not documented, but necessary — `_customDepthParams` only adjusts the Z-level iteration
+      list; `PocketShape.areaOpShapes` reads `obj.FinalDepth.Value` directly to build the actual
+      removal-shape geometry, independent of that list). The first version only touched
+      `_customDepthParams` and was verified only against that function's own return value, not
+      the real generated toolpath — it silently did nothing to the actual cut depth. Caught during
+      later work on a different feature by checking real `Path.Commands` Z values end-to-end, not
+      by trusting the earlier "verified" claim. Fixed by having `areaOpShapes` temporarily set
+      `obj.FinalDepth` to the adjusted value for that one synchronous call, then restore it (safe
+      even though `FinalDepth` is normally expression-driven — verified empirically that a direct
+      assignment doesn't break the expression, which simply reasserts on the next real recompute).
+      Confirmed working for both positive and negative values via real toolpath Z inspection.
 - [x] Pocket: ramp entry, Helix type (Fusion's Linking tab) — `PocketShape` had **no properties or
       toolpath support for this at all** (confirmed by reading `Path.Op.Area.py`). Added
       `RampType`/`RampAngle` to `ops/pocket.py`; `execute()` wraps the base class's (never
