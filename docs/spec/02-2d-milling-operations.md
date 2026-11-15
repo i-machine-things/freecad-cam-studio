@@ -52,7 +52,8 @@ higher feed rates.
   separate axial/radial stock-to-leave is *not* Adaptive-specific — Fusion's own Pocket reference
   documents both controls too, so this is a shared control across both operations, not a
   distinguishing one. The real Adaptive-specific control on that fourth tab is **Optimal Load**
-  (target tool engagement/chip load for the adaptive strategy) — that's the one worth calling out
+  (maximum tool engagement/stepover limit for the adaptive strategy — not chip load, a distinct
+  quantity) — that's the one worth calling out
   as the meaningful difference from Pocket.
 - **Patent note**: this is the strategy name most associated with Autodesk's adaptive-clearing
   patents. Per [CLEAN-ROOM.md](../CLEAN-ROOM.md), implement against published trochoidal/adaptive

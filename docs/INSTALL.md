@@ -24,7 +24,7 @@ Clone this repo directly into your FreeCAD user `Mod` directory:
 git clone <this-repo-url> ~/.local/share/FreeCAD/Mod/CamStudio
 
 # macOS
-git clone <this-repo-url> "~/Library/Application Support/FreeCAD/Mod/CamStudio"
+git clone <this-repo-url> "$HOME/Library/Application Support/FreeCAD/Mod/CamStudio"
 
 # Windows (PowerShell)
 git clone <this-repo-url> "$env:APPDATA\FreeCAD\Mod\CamStudio"
