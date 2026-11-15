@@ -11,9 +11,13 @@ Adaptive/Drilling`). This phase is a new Gui layer only — no new toolpath engi
 - [ ] Finish the behavior spec: Face, Pocket, Contour, Adaptive Clearing, Drilling, Setup/Stock/WCS
 - [x] Map each spec'd operation onto FreeCAD's existing CAM-module operation classes (done —
       see ARCHITECTURE.md's class list)
-- [ ] Spike: how an external addon registers a replacement `TaskPanel` for an existing op's
-      edit/double-click behavior (open item in ARCHITECTURE.md) — do this before the tree/dialog
-      work below, it's a risk to the whole approach if it turns out to need core patches
+- [x] Spike: how an external addon registers a replacement `TaskPanel` for an existing op's
+      edit/double-click behavior (resolved — see ARCHITECTURE.md's "Resolved" section: per-instance
+      `ViewObject.Proxy`/`CommandResources`, no core patch needed)
+- [x] First working command: `CamStudio_CreateJob` ("New Setup") — creates a real FreeCAD CAM Job
+      via our own toolbar entry, reusing `Path.Main.Gui.Job.Create` and stock CAM's own Job
+      ViewProvider unmodified (Job-level editing isn't part of this project's scope, only
+      operation TaskPanels are)
 - [ ] Build the Setup → Operations tree UI (PySide/Qt) matching the workflow sequence from the spec
 - [ ] Parameter dialogs for the Phase 1 operation set, backed by the existing `Path.Op.*` objects'
       own properties (no new property schema)

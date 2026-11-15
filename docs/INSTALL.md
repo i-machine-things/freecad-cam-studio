@@ -38,6 +38,6 @@ directory FreeCAD is using, with `Mod` as a subdirectory of it.
 
 ## Current status
 
-Phase 1 is still in progress (see [ROADMAP.md](ROADMAP.md)) — installing today gets you an empty
-workbench entry with no commands yet. This file exists now so the install path is validated
-early, before there's a reason to actually use it.
+Phase 1 is in progress (see [ROADMAP.md](ROADMAP.md)). Installing today gets you a workbench with
+one working command so far — "New Setup" (creates a CAM Job from the selected solid(s)) — with
+operation commands/dialogs still to come.
