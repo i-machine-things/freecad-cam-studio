@@ -45,6 +45,21 @@ def _qty_get(widget):
 
 def _qty_set(widget, value):
     widget.setProperty("rawValue", value)
+    # Remember what the widget itself reports right after loading. It rounds to its display
+    # precision in the user's unit schema (3 mm reads back as 2.999994 under an inch
+    # schema), so "differs from the property" is not the same as "the user edited it".
+    widget.setProperty("camStudioLoaded", widget.property("rawValue"))
+
+
+def _qty_commit(obj, prop, widget):
+    """Write the widget's value to obj.<prop> only if the user actually changed the widget
+    since it was loaded. Comparing against the property instead would rewrite every
+    quantity on the page with its display-rounded form whenever any one field changed."""
+    value = widget.property("rawValue")
+    if value == widget.property("camStudioLoaded"):
+        return
+    setattr(obj, prop, value)
+    widget.setProperty("camStudioLoaded", value)
 
 
 def _feed_display_unit():
@@ -86,6 +101,7 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
 
         passes_group = CollapsibleSection(translate("CamStudio_Pocket", "Passes"))
         passes_layout = QtWidgets.QFormLayout()
+        passes_layout.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
         form.clearingPattern = QtWidgets.QComboBox()
         form.cutMode = QtWidgets.QComboBox()
         form.stepOverPercent = QtWidgets.QSpinBox()
@@ -155,6 +171,9 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
 
         linking_group = CollapsibleSection(translate("CamStudio_Pocket", "Linking"))
         linking_layout = QtWidgets.QFormLayout()
+        # The task panel is narrow by default; the long labels here would otherwise force
+        # the form wider than it and clip the fields behind a horizontal scroll bar.
+        linking_layout.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
         form.rampType = QtWidgets.QComboBox()
         form.rampType.addItem(translate("CamStudio_Pocket", "Plunge"), "Plunge")
         form.rampType.addItem(translate("CamStudio_Pocket", "Helix"), "Helix")
@@ -175,22 +194,61 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             translate("CamStudio_Pocket", "Maximum Ramp Stepdown (0 = unconstrained)"),
             form.maxRampStepdown,
         )
-        form.useLeadInOut = QtWidgets.QCheckBox(
-            translate("CamStudio_Pocket", "Lead-In/Lead-Out (Linear, disabled with Helix ramp)")
+        # Lead-In and Lead-Out: enabled separately, each an arc tangent to the cut (radius +
+        # sweep) with an optional straight leg outside it -- see ops/pocket.py's
+        # _applyLeadInOut. Row order follows Fusion's Linking tab.
+        helixNote = translate(
+            "CamStudio_Pocket", "Not available while Ramp Type is Helix (the helix is the entry)."
         )
+        form.useLeadIn = QtWidgets.QCheckBox(translate("CamStudio_Pocket", "Lead-In (Entry)"))
+        form.useLeadIn.setToolTip(helixNote)
+        form.leadInRadius = _quantity_spinbox()
+        form.leadInSweepAngle = _quantity_spinbox(unit="deg")
         form.leadInDistance = _quantity_spinbox()
+        form.leadInPerpendicular = QtWidgets.QCheckBox(
+            translate("CamStudio_Pocket", "Perpendicular Lead-In")
+        )
+        form.useLeadOut = QtWidgets.QCheckBox(translate("CamStudio_Pocket", "Lead-Out (Exit)"))
+        form.useLeadOut.setToolTip(helixNote)
         form.sameAsLeadIn = QtWidgets.QCheckBox(
             translate("CamStudio_Pocket", "Same as Lead-In")
         )
         form.leadOutDistance = _quantity_spinbox()
-        linking_layout.addRow(form.useLeadInOut)
-        linking_layout.addRow(
-            translate("CamStudio_Pocket", "Lead-In Distance"), form.leadInDistance
+        form.leadOutRadius = _quantity_spinbox()
+        form.leadOutSweepAngle = _quantity_spinbox(unit="deg")
+        form.leadOutPerpendicular = QtWidgets.QCheckBox(
+            translate("CamStudio_Pocket", "Perpendicular Lead-Out")
         )
+        perpendicularTip = translate(
+            "CamStudio_Pocket",
+            "Run the straight leg square to the lead arc instead of tangent to it -- useful "
+            "where a tangent leg would run into a wall, such as inside a bore.",
+        )
+        form.leadInPerpendicular.setToolTip(perpendicularTip)
+        form.leadOutPerpendicular.setToolTip(perpendicularTip)
+        linking_layout.addRow(form.useLeadIn)
+        linking_layout.addRow(
+            translate("CamStudio_Pocket", "Horizontal Lead-In Radius"), form.leadInRadius
+        )
+        linking_layout.addRow(
+            translate("CamStudio_Pocket", "Lead-In Sweep Angle"), form.leadInSweepAngle
+        )
+        linking_layout.addRow(
+            translate("CamStudio_Pocket", "Linear Lead-In Distance"), form.leadInDistance
+        )
+        linking_layout.addRow(form.leadInPerpendicular)
+        linking_layout.addRow(form.useLeadOut)
         linking_layout.addRow(form.sameAsLeadIn)
         linking_layout.addRow(
-            translate("CamStudio_Pocket", "Lead-Out Distance"), form.leadOutDistance
+            translate("CamStudio_Pocket", "Linear Lead-Out Distance"), form.leadOutDistance
         )
+        linking_layout.addRow(
+            translate("CamStudio_Pocket", "Horizontal Lead-Out Radius"), form.leadOutRadius
+        )
+        linking_layout.addRow(
+            translate("CamStudio_Pocket", "Lead-Out Sweep Angle"), form.leadOutSweepAngle
+        )
+        linking_layout.addRow(form.leadOutPerpendicular)
         linking_group.setContentLayout(linking_layout)
         layout.addWidget(linking_group)
 
@@ -238,14 +296,31 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         self.form.maxRampStepdown.setEnabled(isHelix)
         # Mutually exclusive with Lead-In/Lead-Out for now -- see ops/pocket.py's
         # _applyLeadInOut docstring.
-        self.form.useLeadInOut.setEnabled(not isHelix)
+        self.form.useLeadIn.setEnabled(not isHelix)
+        self.form.useLeadOut.setEnabled(not isHelix)
         self.updateLeadInOutFieldsEnabled(obj)
 
     def updateLeadInOutFieldsEnabled(self, obj):
-        active = obj.UseLeadInOut and obj.RampType != "Helix"
-        self.form.leadInDistance.setEnabled(active)
-        self.form.sameAsLeadIn.setEnabled(active)
-        self.form.leadOutDistance.setEnabled(active and not obj.SameAsLeadIn)
+        form = self.form
+        notHelix = obj.RampType != "Helix"
+        inActive = bool(obj.UseLeadIn) and notHelix
+        for widget in (
+            form.leadInRadius,
+            form.leadInSweepAngle,
+            form.leadInDistance,
+            form.leadInPerpendicular,
+        ):
+            widget.setEnabled(inActive)
+        outActive = bool(obj.UseLeadOut) and notHelix
+        form.sameAsLeadIn.setEnabled(outActive)
+        ownValues = outActive and not obj.SameAsLeadIn
+        for widget in (
+            form.leadOutDistance,
+            form.leadOutRadius,
+            form.leadOutSweepAngle,
+            form.leadOutPerpendicular,
+        ):
+            widget.setEnabled(ownValues)
 
     def getFields(self, obj):
         if obj.CutMode != str(self.form.cutMode.currentData()):
@@ -254,12 +329,9 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             obj.ClearingPattern = str(self.form.clearingPattern.currentData())
         if obj.StepOver != self.form.stepOverPercent.value():
             obj.StepOver = self.form.stepOverPercent.value()
-        if obj.ExtraOffset.Value != _qty_get(self.form.radialStockToLeave):
-            obj.ExtraOffset = _qty_get(self.form.radialStockToLeave)
-        if obj.AxialStockToLeave.Value != _qty_get(self.form.axialStockToLeave):
-            obj.AxialStockToLeave = _qty_get(self.form.axialStockToLeave)
-        if obj.ZigZagAngle != _qty_get(self.form.zigZagAngle):
-            obj.ZigZagAngle = _qty_get(self.form.zigZagAngle)
+        _qty_commit(obj, "ExtraOffset", self.form.radialStockToLeave)
+        _qty_commit(obj, "AxialStockToLeave", self.form.axialStockToLeave)
+        _qty_commit(obj, "ZigZagAngle", self.form.zigZagAngle)
         if obj.MinTravel != self.form.minTravel.isChecked():
             obj.MinTravel = self.form.minTravel.isChecked()
         if obj.UseRestMachining != self.form.useRestMachining.isChecked():
@@ -280,22 +352,15 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             obj.UseStartPoint = self.form.useStartPoint.isChecked()
         if obj.RampType != str(self.form.rampType.currentData()):
             obj.RampType = str(self.form.rampType.currentData())
-        if obj.RampAngle.Value != _qty_get(self.form.rampAngle):
-            obj.RampAngle = _qty_get(self.form.rampAngle)
-        if obj.HelicalRampDiameter.Value != _qty_get(self.form.helicalRampDiameter):
-            obj.HelicalRampDiameter = _qty_get(self.form.helicalRampDiameter)
-        if obj.MinimumRampDiameter.Value != _qty_get(self.form.minimumRampDiameter):
-            obj.MinimumRampDiameter = _qty_get(self.form.minimumRampDiameter)
-        if obj.MaxRampStepdown.Value != _qty_get(self.form.maxRampStepdown):
-            obj.MaxRampStepdown = _qty_get(self.form.maxRampStepdown)
-        if obj.UseLeadInOut != self.form.useLeadInOut.isChecked():
-            obj.UseLeadInOut = self.form.useLeadInOut.isChecked()
-        if obj.LeadInDistance.Value != _qty_get(self.form.leadInDistance):
-            obj.LeadInDistance = _qty_get(self.form.leadInDistance)
-        if obj.SameAsLeadIn != self.form.sameAsLeadIn.isChecked():
-            obj.SameAsLeadIn = self.form.sameAsLeadIn.isChecked()
-        if obj.LeadOutDistance.Value != _qty_get(self.form.leadOutDistance):
-            obj.LeadOutDistance = _qty_get(self.form.leadOutDistance)
+        _qty_commit(obj, "RampAngle", self.form.rampAngle)
+        _qty_commit(obj, "HelicalRampDiameter", self.form.helicalRampDiameter)
+        _qty_commit(obj, "MinimumRampDiameter", self.form.minimumRampDiameter)
+        _qty_commit(obj, "MaxRampStepdown", self.form.maxRampStepdown)
+        for prop, widget in self._leadCheckboxes():
+            if getattr(obj, prop) != widget.isChecked():
+                setattr(obj, prop, widget.isChecked())
+        for prop, widget in self._leadQuantities():
+            _qty_commit(obj, prop, widget)
 
         self.updateToolController(obj, self.form.toolController)
         self.updateCoolant(obj, self.form.coolantController)
@@ -320,10 +385,10 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         _qty_set(self.form.helicalRampDiameter, obj.HelicalRampDiameter.Value)
         _qty_set(self.form.minimumRampDiameter, obj.MinimumRampDiameter.Value)
         _qty_set(self.form.maxRampStepdown, obj.MaxRampStepdown.Value)
-        self.form.useLeadInOut.setChecked(obj.UseLeadInOut)
-        _qty_set(self.form.leadInDistance, obj.LeadInDistance.Value)
-        self.form.sameAsLeadIn.setChecked(obj.SameAsLeadIn)
-        _qty_set(self.form.leadOutDistance, obj.LeadOutDistance.Value)
+        for prop, widget in self._leadCheckboxes():
+            widget.setChecked(getattr(obj, prop))
+        for prop, widget in self._leadQuantities():
+            _qty_set(widget, getattr(obj, prop).Value)
         self.updateZigZagAngleEnabled(obj)
         self.updateRampFieldsEnabled(obj)
 
@@ -352,8 +417,31 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             self.form.helicalRampDiameter.editingFinished,
             self.form.minimumRampDiameter.editingFinished,
             self.form.maxRampStepdown.editingFinished,
-            self.form.useLeadInOut.clicked,
-            self.form.leadInDistance.editingFinished,
-            self.form.sameAsLeadIn.clicked,
-            self.form.leadOutDistance.editingFinished,
+        ] + [
+            widget.clicked for _prop, widget in self._leadCheckboxes()
+        ] + [
+            widget.editingFinished for _prop, widget in self._leadQuantities()
+        ]
+
+    def _leadCheckboxes(self):
+        """(property name, checkbox) for every Lead-In/Lead-Out bool."""
+        form = self.form
+        return [
+            ("UseLeadIn", form.useLeadIn),
+            ("LeadInPerpendicular", form.leadInPerpendicular),
+            ("UseLeadOut", form.useLeadOut),
+            ("SameAsLeadIn", form.sameAsLeadIn),
+            ("LeadOutPerpendicular", form.leadOutPerpendicular),
+        ]
+
+    def _leadQuantities(self):
+        """(property name, quantity spin box) for every Lead-In/Lead-Out length/angle."""
+        form = self.form
+        return [
+            ("LeadInRadius", form.leadInRadius),
+            ("LeadInSweepAngle", form.leadInSweepAngle),
+            ("LeadInDistance", form.leadInDistance),
+            ("LeadOutDistance", form.leadOutDistance),
+            ("LeadOutRadius", form.leadOutRadius),
+            ("LeadOutSweepAngle", form.leadOutSweepAngle),
         ]

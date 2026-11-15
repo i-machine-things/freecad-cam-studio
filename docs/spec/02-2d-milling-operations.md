@@ -78,7 +78,10 @@ Feedrate, Allow Rapid Retract, Safe Distance, **Keep Tool Down** (we have `KeepT
 + Maximum Stay-Down Distance, Lift Height, a full **Lead-In/Lead-Out** arc/line subsystem
 (Horizontal/Vertical Lead Radius, Sweep Angle, Linear Lead Distance, Perpendicular, "Same as
 Lead-In") that is *distinct from ramping* (approach/retract arcs around the cut, not the
-plunge-entry strategy), and **Ramp Type with seven options**: Plunge Outside Stock, Zig-Zag,
+plunge-entry strategy; Lead-In and Lead-Out are enabled separately, the straight leg sits
+outside the arc and is where a controller would switch radius compensation on/off, and
+Perpendicular swaps the leg from tangent-to-the-arc to square-to-it for places a tangent leg
+would hit a wall, e.g. a bore), and **Ramp Type with seven options**: Plunge Outside Stock, Zig-Zag,
 Predrill, Profile, Plunge, Smooth Profile, Helix (our earlier forum-sourced research only found
 five of these — this reference page is the authoritative count) — plus Ramping Angle (= our
 `RampAngle`), **Ramp Taper Angle** (conical helix, distinct from Ramping Angle), **Maximum Ramp

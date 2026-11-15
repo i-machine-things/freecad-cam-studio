@@ -30,12 +30,12 @@ at all:
    not solid material, and are deliberately left as straight plunges for
    now -- per-level/per-region ramping is a tracked follow-up, see
    docs/ROADMAP.md.
-3. "Lead-In"/"Lead-Out" (also Fusion's Linking tab, Linear type only):
-   a separate feature from ramping -- it shifts the plunge's own XY
-   target backward off the true path by the lead distance, then adds a
-   horizontal approach move at cutting feed into the true start (mirror
-   at the tail for lead-out), so the tool is already moving in the cut
-   direction before it reaches full engagement. Mutually exclusive with
+3. "Lead-In"/"Lead-Out" (also Fusion's Linking tab): a separate feature
+   from ramping -- it moves the plunge off the true path to the start of
+   a lead (an optional straight leg, then an optional arc tangent to the
+   first cut), so the tool is already moving in the cut direction, at
+   cutting feed, before it reaches full engagement (mirror at the tail
+   for lead-out). Mutually exclusive with
    RampType=Helix for now (see execute()). See _applyLeadInOut's
    docstring for the full V1 scope statement.
 """
@@ -170,25 +170,71 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
                 ),
             )
             obj.FinishFeedrate = 0
-        if not hasattr(obj, "UseLeadInOut"):
-            obj.addProperty(
-                "App::PropertyBool",
-                "UseLeadInOut",
-                "Pocket",
-                QT_TRANSLATE_NOOP(
-                    "App::Property",
-                    "Enable Lead-In/Lead-Out moves (Linear type only -- see "
-                    "docs/ROADMAP.md for the arc/radius type). Ignored when Ramp Type is "
-                    "Helix.",
-                ),
-            )
-            obj.UseLeadInOut = False
+        # Lead-In and Lead-Out are enabled separately, as in Fusion. An earlier version of
+        # this class had a single combined UseLeadInOut switch -- carry its value over to
+        # both and drop it (this method also runs on document restore).
+        legacyLeads = None
+        if hasattr(obj, "UseLeadInOut"):
+            legacyLeads = bool(obj.UseLeadInOut)
+            obj.removeProperty("UseLeadInOut")
+        for name, doc in (
+            ("UseLeadIn", "Enable the Lead-In (entry) move. Ignored when Ramp Type is Helix."),
+            ("UseLeadOut", "Enable the Lead-Out (exit) move. Ignored when Ramp Type is Helix."),
+        ):
+            if not hasattr(obj, name):
+                obj.addProperty(
+                    "App::PropertyBool", name, "Pocket", QT_TRANSLATE_NOOP("App::Property", doc)
+                )
+                setattr(obj, name, bool(legacyLeads))
+        for name, doc in (
+            (
+                "LeadInRadius",
+                "Radius of the horizontal Lead-In arc, tangent to the first cut. 0 = no arc",
+            ),
+            (
+                "LeadOutRadius",
+                "Radius of the horizontal Lead-Out arc, tangent to the last cut. 0 = no arc "
+                "(ignored if Same as Lead-In)",
+            ),
+        ):
+            if not hasattr(obj, name):
+                obj.addProperty(
+                    "App::PropertyDistance", name, "Pocket", QT_TRANSLATE_NOOP("App::Property", doc)
+                )
+                setattr(obj, name, 0)
+        for name, doc in (
+            ("LeadInSweepAngle", "Angle the Lead-In arc sweeps through"),
+            ("LeadOutSweepAngle", "Angle the Lead-Out arc sweeps through (ignored if Same as Lead-In)"),
+        ):
+            if not hasattr(obj, name):
+                obj.addProperty(
+                    "App::PropertyAngle", name, "Pocket", QT_TRANSLATE_NOOP("App::Property", doc)
+                )
+                setattr(obj, name, 90.0)
+        for name, doc in (
+            (
+                "LeadInPerpendicular",
+                "Make the straight Lead-In leg square to the lead arc instead of tangent to it",
+            ),
+            (
+                "LeadOutPerpendicular",
+                "Make the straight Lead-Out leg square to the lead arc instead of tangent to it "
+                "(ignored if Same as Lead-In)",
+            ),
+        ):
+            if not hasattr(obj, name):
+                obj.addProperty(
+                    "App::PropertyBool", name, "Pocket", QT_TRANSLATE_NOOP("App::Property", doc)
+                )
+                setattr(obj, name, False)
         if not hasattr(obj, "LeadInDistance"):
             obj.addProperty(
                 "App::PropertyDistance",
                 "LeadInDistance",
                 "Pocket",
-                QT_TRANSLATE_NOOP("App::Property", "Linear Lead-In distance"),
+                QT_TRANSLATE_NOOP(
+                    "App::Property", "Length of the straight Lead-In leg ahead of the lead arc"
+                ),
             )
             obj.LeadInDistance = 0
         if not hasattr(obj, "SameAsLeadIn"):
@@ -205,7 +251,9 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
                 "LeadOutDistance",
                 "Pocket",
                 QT_TRANSLATE_NOOP(
-                    "App::Property", "Linear Lead-Out distance (ignored if Same as Lead-In)"
+                    "App::Property",
+                    "Length of the straight Lead-Out leg after the lead arc (ignored if Same "
+                    "as Lead-In)",
                 ),
             )
             obj.LeadOutDistance = 0
@@ -259,7 +307,7 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         rampType = getattr(obj, "RampType", "Plunge")
         if rampType == "Helix":
             self._applyHelixRampEntry(obj)
-        elif getattr(obj, "UseLeadInOut", False):
+        elif getattr(obj, "UseLeadIn", False) or getattr(obj, "UseLeadOut", False):
             # Mutually exclusive with Helix for now -- see _applyLeadInOut's docstring.
             self._applyLeadInOut(obj)
         return result
@@ -543,20 +591,19 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         return cmds
 
     def _applyLeadInOut(self, obj):
-        """Fusion's Linking tab Lead-In/Lead-Out -- Linear type only (V1 scope; the arc/
-        radius type -- Horizontal Lead Radius, Sweep Angle -- is a tracked follow-up, see
-        docs/ROADMAP.md).
+        """Fusion's Linking tab Lead-In/Lead-Out. Each lead is, from the toolpath outward:
+        an arc tangent to the cut (Horizontal Lead Radius + Sweep Angle; radius 0 = none),
+        then a straight leg (Linear Lead Distance; 0 = none) that is tangent to that arc, or
+        square to it with Perpendicular. Lead-In and Lead-Out are enabled separately; Same
+        as Lead-In reuses the lead-in's values for the lead-out.
 
         Design note (why this isn't a simple post-insertion like the ramp/finishing-pass
         work above): a correct lead-in doesn't just add a move *after* the plunge lands on
-        the true path start -- it moves the plunge's own XY target backward, off the true
-        path, by the lead distance along the first cut move's own direction, then adds a
-        horizontal approach move (at cutting feed) from that shifted point into the true
-        start. That way the tool is already moving in the cut direction, at cutting feed,
-        by the time it reaches the real path, instead of plunging directly into full
-        engagement at a single point. Lead-out mirrors this at the tail: extend past the
-        true end point along the last cut move's own direction, at cutting feed, before
-        the final retract.
+        the true path start -- it moves the plunge itself off the true path, to the far end
+        of the lead, and the lead then carries the tool into the true start already moving
+        in the cut direction at cutting feed, instead of plunging directly into full
+        engagement at a single point. Lead-out mirrors this at the tail, before the final
+        retract.
 
         V1 scope, stated plainly (same honesty as the Helix ramp above):
         - Only the operation's single first plunge / single final cutting move are
@@ -567,14 +614,13 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
           this is skipped rather than guessing a tangent direction.
         - Pocket-geometry-aware by rejection, not by adaptation: each lead's swept cutter
           area (tool radius + the radial Stock to Leave in force for that move) is checked
-          against the pocket's walls and islands (_sweptAreaFits). A lead that does not
-          fit is left out entirely, with a warning -- it is not shortened or re-aimed.
+          against the pocket's walls and islands (_sweptAreaFits). The arc is tried on
+          both sides of the cut (the side away from the wall for the current Cutting
+          Direction first); if neither fits, the lead is left out entirely, with a
+          warning -- it is not shortened or resized.
+        - Not built yet (docs/ROADMAP.md): Vertical Lead Radius, a separate lead feedrate.
         """
         cmds = list(obj.Path.Commands)
-        leadIn = max(0.0, obj.LeadInDistance.Value)
-        sameAsLeadIn = bool(getattr(obj, "SameAsLeadIn", True))
-        leadOut = leadIn if sameAsLeadIn else max(0.0, obj.LeadOutDistance.Value)
-
         toolRadius = self.tool.Diameter.Value / 2.0
         stockToLeave = obj.ExtraOffset.Value
         # The first plunge always belongs to the roughing pass. The last cutting move
@@ -583,37 +629,122 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         finished = int(getattr(obj, "FinishingPasses", 0)) > 0 and stockToLeave != 0
         leadInClearance = toolRadius + stockToLeave
         leadOutClearance = toolRadius + (0.0 if finished else stockToLeave)
+        # Climb milling keeps the tool to the left of the material, so the open side --
+        # where a lead arc has room -- is to the left of travel; conventional, the right.
+        # Only a preference: the other side is still tried, and the fit check decides.
+        sides = (1, -1) if getattr(obj, "CutMode", "Climb") == "Climb" else (-1, 1)
 
         changed = False
-        if leadIn > 0:
-            newCmds = self._insertLeadIn(cmds, leadIn, leadInClearance)
+        for which, enabled, insert, clearance in (
+            ("Lead-In", getattr(obj, "UseLeadIn", False), self._insertLeadIn, leadInClearance),
+            ("Lead-Out", getattr(obj, "UseLeadOut", False), self._insertLeadOut, leadOutClearance),
+        ):
+            if not enabled:
+                continue
+            spec = self._leadSpec(obj, which)
+            if spec is None:
+                continue
+            newCmds = insert(cmds, spec, clearance, sides)
             if newCmds is not None:
                 cmds = newCmds
                 changed = True
             else:
-                self._warnLeadSkipped(obj, "Lead-In")
-        if leadOut > 0:
-            newCmds = self._insertLeadOut(cmds, leadOut, leadOutClearance)
-            if newCmds is not None:
-                cmds = newCmds
-                changed = True
-            else:
-                self._warnLeadSkipped(obj, "Lead-Out")
+                self._warnLeadSkipped(obj, which)
 
         if changed:
             obj.Path = Path.Path(cmds)
             obj.CycleTime = PathOp.getCycleTimeEstimate(obj)
             self.job.Proxy.getCycleTime()
 
+    def _leadSpec(self, obj, which):
+        """(radius, sweepDegrees, linearDistance, perpendicular) for "Lead-In"/"Lead-Out",
+        or None when those values describe no move at all."""
+        prefix = "LeadIn" if which == "Lead-In" or getattr(obj, "SameAsLeadIn", True) else "LeadOut"
+        radius = max(0.0, getattr(obj, prefix + "Radius").Value)
+        sweep = max(0.0, min(180.0, getattr(obj, prefix + "SweepAngle").Value))
+        linear = max(0.0, getattr(obj, prefix + "Distance").Value)
+        if radius <= 1e-9 or sweep <= 1e-9:
+            radius = sweep = 0.0
+        if radius == 0.0 and linear <= 1e-9:
+            return None
+        return radius, sweep, linear, bool(getattr(obj, prefix + "Perpendicular"))
+
     def _warnLeadSkipped(self, obj, which):
         Path.Log.warning(
-            "%s: %s left out -- it does not fit inside the pocket at that distance, or the "
+            "%s: %s left out -- it does not fit inside the pocket with these values, or the "
             "adjacent move is not a straight cut it can be aligned to.\n" % (obj.Label, which)
         )
 
-    def _insertLeadIn(self, cmds, leadIn, clearance):
-        """Return `cmds` with a linear lead-in of length `leadIn` added at the first
-        plunge, or None if it can't be added safely. `clearance` is the radius the cutter
+    @staticmethod
+    def _leadGeometry(px, py, dx, dy, spec, side, entering):
+        """Geometry of one lead attached to the toolpath at (px, py), where the tool
+        travels in unit direction (dx, dy). `entering`: the lead ends there (lead-in);
+        otherwise it starts there (lead-out). `side`: +1 puts the arc's center to the left
+        of travel, -1 to the right.
+
+        Returns a dict: `junction` (where arc and straight leg meet; equals the attach
+        point with no arc), `far` (the lead's outer end -- where a lead-in starts / a
+        lead-out finishes), `center` (arc center or None), `ccw` (arc direction of travel),
+        `hasLinear`, and `points` (XY polyline from the attach point outward, the arc
+        sampled every <= 5 degrees, for the fit check)."""
+        radius, sweepDeg, linear, perpendicular = spec
+
+        def rot(vx, vy, angle):
+            c, s = math.cos(angle), math.sin(angle)
+            return vx * c - vy * s, vx * s + vy * c
+
+        points = [(px, py)]
+        center = None
+        jx, jy, tx, ty = px, py, dx, dy
+        if radius > 0:
+            cx, cy = px - dy * side * radius, py + dx * side * radius
+            center = (cx, cy)
+            # Travel around a center on the left is counter-clockwise. A lead-in's other
+            # end lies *back* along that travel, a lead-out's *ahead* of it.
+            turn = (-side if entering else side) * math.radians(sweepDeg)
+            steps = max(2, int(math.ceil(sweepDeg / 5.0)))
+            for k in range(1, steps + 1):
+                rx, ry = rot(px - cx, py - cy, turn * k / steps)
+                points.append((cx + rx, cy + ry))
+            jx, jy = points[-1]
+            tx, ty = rot(dx, dy, turn)  # travel direction at the junction
+        fx, fy = jx, jy
+        hasLinear = linear > 1e-9
+        if hasLinear:
+            if perpendicular and center is not None:
+                # Square to the arc = along its radius, on the center's side: the leg runs
+                # between the junction and a point toward the arc center, which keeps it
+                # away from the wall the tangent version would head for.
+                ux, uy = (center[0] - jx) / radius, (center[1] - jy) / radius
+            else:
+                # Tangent: straight on from the arc's end (backward for a lead-in).
+                sign = -1.0 if entering else 1.0
+                ux, uy = sign * tx, sign * ty
+            fx, fy = jx + ux * linear, jy + uy * linear
+            points.append((fx, fy))
+        return {
+            "junction": (jx, jy),
+            "far": (fx, fy),
+            "center": center,
+            "ccw": side > 0,
+            "hasLinear": hasLinear,
+            "points": points,
+        }
+
+    def _fitLead(self, px, py, dx, dy, spec, clearance, sides, z, entering):
+        """First lead geometry (trying each of `sides`) whose swept cutter area fits
+        inside the pocket, or None."""
+        for side in sides:
+            geometry = self._leadGeometry(px, py, dx, dy, spec, side, entering)
+            if self._sweptAreaFits(geometry["points"], clearance, z):
+                return geometry
+            if geometry["center"] is None:
+                break  # no arc: both sides are the same straight leg
+        return None
+
+    def _insertLeadIn(self, cmds, spec, clearance, sides):
+        """Return `cmds` with a lead-in added at the first plunge, or None if it can't be
+        added safely. `spec` is a _leadSpec tuple; `clearance` is the radius the cutter
         must keep clear around its center (tool radius + radial stock to leave)."""
         found = self._findFirstPlunge(cmds)
         if found is None:
@@ -632,9 +763,10 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         if length < 1e-6:
             return None
         dx, dy = dx / length, dy / length
-        approachX, approachY = end.x - dx * leadIn, end.y - dy * leadIn
-        if not self._sweptAreaFits([(approachX, approachY), (end.x, end.y)], clearance, end.z):
+        lead = self._fitLead(end.x, end.y, dx, dy, spec, clearance, sides, end.z, True)
+        if lead is None:
             return None
+        approachX, approachY = lead["far"]
 
         # The tool has to be over the approach point *before* it starts descending, so every
         # rapid that positions it over the old plunge point has to move with it -- not just
@@ -674,16 +806,20 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         newCmds[plungeIdx] = Path.Command(
             plungeCmd.Name, dict(plungeCmd.Parameters, X=approachX, Y=approachY)
         )
-        leadInMove = Path.Command(
-            "G1", self._withFeed({"X": end.x, "Y": end.y, "Z": end.z}, self.horizFeed)
-        )
-        newCmds.insert(plungeIdx + 1, leadInMove)
+        # Then travel the lead inward: straight leg to the junction, arc into the true start.
+        moves = []
+        jx, jy = lead["junction"]
+        if lead["hasLinear"]:
+            moves.append(self._leadLine(jx, jy, end.z))
+        if lead["center"] is not None:
+            moves.append(self._leadArc((jx, jy), (end.x, end.y), end.z, lead))
+        newCmds[plungeIdx + 1 : plungeIdx + 1] = moves
         return newCmds
 
-    def _insertLeadOut(self, cmds, leadOut, clearance):
-        """Mirror of _insertLeadIn at the tail: extend past the true end point of the
-        last cutting move, along that move's own direction, before the final retract.
-        Returns None if it can't be added safely (see _insertLeadIn)."""
+    def _insertLeadOut(self, cmds, spec, clearance, sides):
+        """Mirror of _insertLeadIn at the tail: leave the true end point of the last
+        cutting move along that move's own direction (arc first, then the straight leg)
+        before the final retract. Returns None if it can't be added safely."""
         lastCutIdx = None
         for i in range(len(cmds) - 1, -1, -1):
             if cmds[i].Name in ("G1", "G01", "G2", "G02", "G3", "G03"):
@@ -703,23 +839,33 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             lastZ = p.get("Z", lastZ)
         p = lastCut.Parameters
         endX, endY, endZ = p.get("X", lastX), p.get("Y", lastY), p.get("Z", lastZ)
-        if lastX is None or endX is None or lastY is None or endY is None:
+        if lastX is None or endX is None or lastY is None or endY is None or endZ is None:
             return None
         dx, dy = endX - lastX, endY - lastY
         length = math.hypot(dx, dy)
         if length < 1e-6:
             return None
         dx, dy = dx / length, dy / length
-        exitX, exitY = endX + dx * leadOut, endY + dy * leadOut
-        if endZ is None or not self._sweptAreaFits(
-            [(endX, endY), (exitX, exitY)], clearance, endZ
-        ):
+        lead = self._fitLead(endX, endY, dx, dy, spec, clearance, sides, endZ, False)
+        if lead is None:
             return None
 
-        leadOutMove = Path.Command(
-            "G1", self._withFeed({"X": exitX, "Y": exitY, "Z": endZ}, self.horizFeed)
-        )
-        return cmds[: lastCutIdx + 1] + [leadOutMove] + cmds[lastCutIdx + 1 :]
+        moves = []
+        if lead["center"] is not None:
+            moves.append(self._leadArc((endX, endY), lead["junction"], endZ, lead))
+        if lead["hasLinear"]:
+            moves.append(self._leadLine(lead["far"][0], lead["far"][1], endZ))
+        return cmds[: lastCutIdx + 1] + moves + cmds[lastCutIdx + 1 :]
+
+    def _leadLine(self, x, y, z):
+        return Path.Command("G1", self._withFeed({"X": x, "Y": y, "Z": z}, self.horizFeed))
+
+    def _leadArc(self, fromXY, toXY, z, lead):
+        """A true arc move (G3 counter-clockwise / G2 clockwise) between two points on the
+        lead's circle. I/J are the center's offset from the arc's start point."""
+        cx, cy = lead["center"]
+        params = {"X": toXY[0], "Y": toXY[1], "Z": z, "I": cx - fromXY[0], "J": cy - fromXY[1]}
+        return Path.Command("G3" if lead["ccw"] else "G2", self._withFeed(params, self.horizFeed))
 
 
 def Create(name, obj=None, parentJob=None):

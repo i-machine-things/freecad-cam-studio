@@ -139,7 +139,8 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       the tool radius; with a ball/radius cutter, negative axial has its own corner-radius-based
       limit) — no input validation/clamping exists for these yet, so an extreme negative value
       could still produce a nonsensical or unsafe toolpath without any warning
-- [x] Pocket Linking tab: **Lead-In/Lead-Out**, Linear type only. Built per the design note from
+- [x] Pocket Linking tab: **Lead-In/Lead-Out** (linear first, arc type added after — see the end
+      of this entry). Built per the design note from
       scoping this (preserved below) rather than a quick post-insertion: `ops/pocket.py`'s
       `_insertLeadIn`/`_insertLeadOut` shift the plunge's own XY target backward (lead-in) or
       extend past the final cutting point forward (lead-out) along that move's own direction,
@@ -165,7 +166,7 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       per-region); only a straight (G1) first/last move is supported — an arc (G2/G3) there is
       skipped rather than guessing a tangent direction; **mutually exclusive with `RampType=Helix`**
       for now (combining a shifted entry point with a spiral descent needs more design than this
-      pass did) — verified via screenshot that the checkbox visibly disables when Helix is
+      pass did) — verified via screenshot that the checkboxes visibly disable when Helix is
       selected. **Pocket-geometry-aware by rejection** (PR #1 review): each lead's swept cutter
       area — tool radius plus the radial Stock to Leave in force for that move (roughing stock for
       the lead-in; none for a lead-out that follows finishing passes) — is checked against the
@@ -177,11 +178,33 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       retargeted to the approach point (not only the command right before the plunge), so no
       descent is diagonal, including when a Z-only rapid precedes the plunge; and nothing is
       post-processed when the base `execute()` bails out early without producing a new path.
-      Still missing: the arc/radius Lead type
-      (Horizontal Lead Radius, Sweep Angle, Perpendicular), High Feedrate Mode (several
-      rapid-vs-feed-move output strategies) + High Feedrate, Allow Rapid Retract, Safe Distance,
-      Maximum Stay-Down Distance (we have the `KeepToolDown` toggle but not this limit), Lift
-      Height
+      **Arc type, added next** (field list and behavior from
+      [Autodesk's 2D Pocket reference](https://help.autodesk.com/cloudhelp/ENU/Fusion-CAM/files/GUID67DC60DE-EE42-4BC4-B50D-B28D938D146E.htm),
+      described in our own words): each lead is now an arc tangent to the cut (Horizontal Lead
+      Radius + Sweep Angle; radius 0 = none, which is exactly the original linear lead) with an
+      optional straight leg outside it (Linear Lead Distance), tangent to the arc or — with
+      Perpendicular — square to it, on the arc-center side. Lead-In and Lead-Out have separate
+      enables (`UseLeadIn`/`UseLeadOut`; the old combined `UseLeadInOut` is migrated on restore),
+      and Same as Lead-In reuses all four lead-in values. Arcs are emitted as true G2/G3 with
+      I/J. The arc is tried on both sides of the cut — the open side for the current Cutting
+      Direction first — and the same fit check picks one or rejects the lead. Verified on real
+      `Path.Commands`: radii consistent, arc tangent to the cut at the attach point, FreeCAD's
+      own `Path.Geom.edgeForCmd` reads the expected arc length, plunge sits at the lead's outer
+      end with no diagonal descent, save/reopen recomputes to the identical path.
+      **Known limit, found while testing**: stock Offset-pattern output ends its last ring *in a
+      corner* (the ring starts and ends on a vertex), where the cutter is tangent to two walls —
+      no tangent exit of any shape fits there, so Lead-Out is rejected on a square-cornered
+      Offset pocket. Making it usable needs the ring's start/end moved to mid-wall (or a small
+      overlap past the start), which is toolpath-ordering work, not lead geometry — tracked here.
+      Lead-In is unaffected (the first plunge is mid-pocket).
+      Still missing: **Vertical Lead-In/Lead-Out Radius** (an arc in the vertical plane easing
+      the descent onto the path), a separate Lead-In/Lead-Out feedrate (part of the Speeds &
+      Feeds item above), leads on every pass/region rather than only the first entry and last
+      exit, "Leads on all Finishing Passes", default lead sizes derived from the tool diameter
+      (ours default to 0 = nothing until set — Fusion's actual defaults need confirming from
+      Allan's install), High Feedrate Mode (several rapid-vs-feed-move output strategies) + High
+      Feedrate, Allow Rapid Retract, Safe Distance, Maximum Stay-Down Distance (we have the
+      `KeepToolDown` toggle but not this limit), Lift Height
 - [ ] Pocket Heights tab: FreeCAD's shared Heights+Depths pages give Clearance/Safe/Start/Final;
       Fusion's Clearance/Retract/Feed/Top/Bottom reads as having a distinct "Feed height" concept
       that may not map 1:1 — needs verification, not an assumed match
