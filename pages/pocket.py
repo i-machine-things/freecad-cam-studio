@@ -22,6 +22,8 @@ from PySide.QtCore import Qt
 import Path.Op.Gui.Base as PathOpGui
 import Path.Op.PocketShape as PathPocketShape
 
+import widgets.tool_picker as ToolPicker
+
 translate = FreeCAD.Qt.translate
 
 
@@ -56,10 +58,15 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         tool_group = QtWidgets.QGroupBox(translate("CamStudio_Pocket", "Tool"))
         tool_layout = QtWidgets.QFormLayout(tool_group)
         form.toolController = QtWidgets.QComboBox()
+        form.selectToolButton = QtWidgets.QPushButton(translate("CamStudio_Pocket", "Select..."))
+        tool_row = QtWidgets.QHBoxLayout()
+        tool_row.addWidget(form.toolController, 1)
+        tool_row.addWidget(form.selectToolButton)
         form.coolantController = QtWidgets.QComboBox()
-        tool_layout.addRow(translate("CamStudio_Pocket", "Tool"), form.toolController)
+        tool_layout.addRow(translate("CamStudio_Pocket", "Tool"), tool_row)
         tool_layout.addRow(translate("CamStudio_Pocket", "Coolant"), form.coolantController)
         layout.addWidget(tool_group)
+        form.selectToolButton.clicked.connect(self._onSelectTool)
 
         passes_group = QtWidgets.QGroupBox(translate("CamStudio_Pocket", "Passes"))
         passes_layout = QtWidgets.QFormLayout(passes_group)
@@ -126,6 +133,14 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             enumTups,
             [("cutMode", "CutMode"), ("clearingPattern", "ClearingPattern")],
         )
+
+    def _onSelectTool(self):
+        tc = ToolPicker.pick_new_tool_controller(self.job, parent=self.form)
+        if tc is None:
+            return
+        self.setupToolController(self.obj, self.form.toolController)
+        self.selectInComboBox(tc.Label, self.form.toolController)
+        self.setDirty()
 
     def updateZigZagAngleEnabled(self, obj):
         self.form.zigZagAngle.setEnabled(obj.ClearingPattern != "Offset")

@@ -123,5 +123,18 @@ entry, let upstream do what it already does correctly, then add only the missing
 and verify the *generated output* (actual Z values, actual feed rates), not just that code ran
 without an exception.
 
-The same pattern is how the remaining tracked gaps (other ramp types, a real tool-library browser)
-should be built, not treated as permanent documentation footnotes.
+The same pattern is how the remaining tracked gaps should be built, not treated as permanent
+documentation footnotes.
+
+## Cross-cutting Gui helpers: `widgets/`
+
+Some gaps aren't operation-specific — every operation's Tool tab needs the same "Select..."
+tool-library button, for example. `widgets/` holds these shared helpers, separate from `pages/`
+(one file per operation) and `ops/` (one file per operation's data-layer Proxy). `widgets/
+tool_picker.py` is the first one: it reuses FreeCAD's own existing `Path.Tool.toolbit.ui.selector.
+ToolBitSelector` dialog and `Path.Tool.Controller.Create` factory (the same building blocks stock
+CAM's own Job-creation dialog already uses to let a user pick a tool from the library) rather than
+building a tool-library browser from scratch. A gotcha worth knowing: the built-in tool library is
+lazily seeded on first use elsewhere in stock CAM, so our own code calls
+`Path.Tool.camassets.ensure_assets_initialized(cam_assets)` defensively before opening the
+selector, rather than assuming something else already triggered it.

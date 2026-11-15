@@ -55,9 +55,36 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       not solid material) and only "Helix" is implemented — Fusion also has Plunge (already the
       default/no-op case), Zigzag, Zig, and Profile ramp types, not yet built. Per-level/per-region
       ramping and the remaining ramp types are tracked follow-ups, not silently dropped scope.
-- [ ] Tool selection: Fusion's "Select..." tool-library browser vs. our current inline combo of
-      tool controllers already on the Job. Cross-cutting (every operation's Tool tab needs it) —
-      build once as shared infrastructure, used first by Pocket
+- [x] Tool selection: Fusion's "Select..." tool-library browser, added alongside the existing
+      inline combo (`widgets/tool_picker.py`, cross-cutting — any operation page can use it, used
+      first by Pocket). Reuses FreeCAD's own existing `Path.Tool.toolbit.ui.selector.ToolBitSelector`
+      dialog and `Path.Tool.Controller.Create` factory (the same building blocks stock CAM's own
+      Job-creation dialog uses) rather than building a tool-library browser from scratch. Verified
+      via a real button click driving the actual modal dialog, not just the underlying logic.
+- [ ] Contour/Profile: cutter compensation ("Compensation Type" — Off / In Computer / In Control /
+      Wear / Inverse Wear, per [Autodesk's reference](https://help.autodesk.com/cloudhelp/ENU/Fusion-CAM/files/GUID89C78618-20FD-4A82-BFB4-BC66AFE417DD.htm)).
+      Confirmed this lives on **2D Contour's** Passes tab specifically, not 2D Pocket's — tracked
+      against the future Contour/Profile operation, not Pocket. FreeCAD's `Path.Op.Profile` already
+      has a partial related property ("Make True, if using Cutter Radius Compensation") to build
+      from — likely a smaller gap than ramps were, but not yet verified against the 4-mode richness
+      Fusion exposes (In Control/Wear/Inverse Wear all emit G41/G42, which is a post-processor-level
+      concern too, not just the toolpath object)
+- [ ] Pocket Tool tab: inline Speeds & Feeds editing. Fusion lets you set/override spindle speed and
+      cutting/plunge feed directly in the operation's own Tool tab; CAM Studio currently requires
+      leaving the op dialog to edit the separate ToolController object. Flagged directly by Allan
+      from his own Fusion install
+- [ ] Pocket Passes tab: Chip Thinning (feed-rate compensation when radial engagement/stepover is
+      low, to maintain target chip load). Flagged directly by Allan from his own Fusion install —
+      not independently confirmed as a named toggle via public-source research (general technique
+      is well documented, e.g. Autodesk's "Constant Cutter Forces" blog post, but the exact current
+      Fusion UI label wasn't found), so verify the exact field/behavior against the real dialog
+      before implementing rather than guessing at a checkbox name
+- [ ] All CAM Studio dialogs: collapsible sections matching Fusion's accordion-style
+      disclosure-triangle groups (confirmed visually from Autodesk's own help-page screenshot —
+      "Machining Type"/"Tool" sections each collapse independently). Current `QGroupBox` sections
+      are static/always-expanded — a real interaction-model gap, not just a visual one, flagged
+      directly by Allan. Likely needs a small reusable collapsible-group-box widget in `widgets/`,
+      used by every operation page, not just Pocket
 - [ ] Build the Setup → Operations tree UI (PySide/Qt) matching the workflow sequence from the spec
 - [ ] Parameter dialogs for the remaining Phase 1 operations (Face, Contour, Adaptive, Drilling),
       each held to the same 100%-parity standard as Pocket above
