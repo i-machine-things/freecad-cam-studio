@@ -20,17 +20,73 @@ setup, run before anything else references a clean top face.
 - For larger stock removal than a simple skim, Adaptive Clearing is used instead of Face.
 - **FreeCAD mapping**: `Path Face` operation — same purpose, direct equivalent.
 
-## 2D Pocket
+## 2D Pocket (Autodesk now calls this "2D Offset Roughing" — renamed from "2D Pocket Clearing")
 
-Purpose: clear material from within a closed boundary down to a depth.
-- Geometry input: can come from sketch edges, solid-model edges, or a selected solid face —
-  three distinct input modes, not just "pick a sketch."
-- Options include tapered walls, a pre-drill entry position (for plunging into a pilot hole
-  rather than ramping/helixing in blind), and separate axial/radial stock-to-leave — the same
-  stock-to-leave controls Adaptive Clearing also exposes (see that section's correction below).
-- **FreeCAD mapping**: `Path Pocket` (2.5D) operations — base concept matches; taper-wall and
-  pre-drill-entry-position options need to be checked against what FreeCAD's pocket op currently
-  exposes (not yet verified — Phase 1 task).
+Purpose: clear material from within a closed boundary down to a depth. Full field list below is
+sourced directly from Autodesk's own
+[2D Offset Roughing reference](https://help.autodesk.com/cloudhelp/ENU/Fusion-CAM/files/GUID67DC60DE-EE42-4BC4-B50D-B28D938D146E.htm)
+page (the authoritative parameter-by-parameter doc, not a tutorial/forum source like the rest of
+this file) — described in our own words, not quoted verbatim. This supersedes the thinner draft
+this section used to have; CAM Studio's current implementation (see `ops/pocket.py`,
+`pages/pocket.py`) covers only a subset, tracked field-by-field against this list in
+`docs/ROADMAP.md`.
+
+**Tool tab**: Coolant, plus a full Feed & Speed section (Spindle Speed, Surface Speed, Ramp
+Spindle Speed, Cutting Feedrate, Feed per Tooth, Lead-In/Lead-Out/Transition/Ramp/Plunge
+Feedrates, Feed per Revolution) editable *inline on the operation*, not only on a separate Tool
+Controller object.
+
+**Geometry tab**: Face/Edge/Sketch selection, with three distinct *machining modes* (Closed
+Pocket / Open Pocket / Standing Boss) rather than one generic selection. Open-pocket selections
+need an **Extension Method** (Tangent / Closest boundary / Parallel) to close the boundary against
+the stock. **Stock Contours** (+ its own boundary selection) lets the cut area be bounded by the
+Setup's stock box, a sketch, or model edges instead of just the raw selection. Per-contour **cut
+direction arrows** are individually clickable. **Rest Machining** here has its own sub-parameters
+(simulated previous Tool Diameter + Corner Radius), separate from the simple on/off we have.
+**Tool Orientation** is a full secondary coordinate-system control (Setup WCS / Model / explicit
+axis selection / named coordinate system, each with its own Origin option) — lets one operation
+cut at an angle to the Setup's main WCS.
+
+**Heights tab**: Clearance / Retract / Feed / Top / Bottom height. FreeCAD's shared Heights+Depths
+pages give us Clearance/Safe/Start/Final — close, but "Retract" and "Feed" height read as
+*distinct* concepts here, not confirmed 1:1 with FreeCAD's Safe/Start; needs verification, not an
+assumed match.
+
+**Passes tab** (the largest tab by far): Tolerance (spline linearization), **Sideways
+Compensation** (Climb/Conventional — this is our existing `CutMode`), **Minimum Cutting Radius**
+(forces a blend in sharp internal corners instead of a zero-radius toolpath), a full **finishing
+pass subsystem** (enable + Number of Passes + per-pass Stepover + "Leads on all Finishing Passes"
++ Finish Feedrate + Repeat Finishing Pass + Finishing Overlap), **Preserve Order**, **Both Ways**
+(climb+conventional alternating, with its own Optimal-Load/Feedrate for the "other way" pass),
+Maximum Stepover (= our `StepOver`), **Use Morphed Spiral Machining** (a named alternate toolpath
+style), **Allow Stepover Cusps**, **Smoothing Deviation**, Multiple Depths + Maximum Stepdown
+(= our `StepDown`), **Finishing Stepdowns** (separate Z-stepdown count/size for finish passes),
+**Wall Taper Angle** (machine a sloped wall with a 2.5D strategy instead of needing 3D — this is
+the "tapered walls" item the old draft of this section already flagged as unresolved), **Use Even
+Stepdowns**, **Order by Depth**, **Order by Step**, Stock to Leave (radial/axial — we have this,
+**but Fusion explicitly supports *negative* stock-to-leave for electrode/spark-gap machining**,
+not yet verified against our `ExtraOffset`/`AxialStockToLeave`), general **Smoothing** (G-code
+arc-fitting/size reduction, distinct from Smoothing Deviation above), and a **Feed Optimization**
+corner-slowdown subsystem (Maximum Directional Change, Reduced Feed Radius/Distance/Feedrate,
+Only Inner Corners).
+
+**Linking tab**: **High Feedrate Mode** (several rapid-vs-feed-move output strategies) + High
+Feedrate, Allow Rapid Retract, Safe Distance, **Keep Tool Down** (we have `KeepToolDown` already)
++ Maximum Stay-Down Distance, Lift Height, a full **Lead-In/Lead-Out** arc/line subsystem
+(Horizontal/Vertical Lead Radius, Sweep Angle, Linear Lead Distance, Perpendicular, "Same as
+Lead-In") that is *distinct from ramping* (approach/retract arcs around the cut, not the
+plunge-entry strategy), and **Ramp Type with seven options**: Plunge Outside Stock, Zig-Zag,
+Predrill, Profile, Plunge, Smooth Profile, Helix (our earlier forum-sourced research only found
+five of these — this reference page is the authoritative count) — plus Ramping Angle (= our
+`RampAngle`), **Ramp Taper Angle** (conical helix, distinct from Ramping Angle), **Maximum Ramp
+Stepdown**, **Ramp Clearance Height**, and critically **Helical Ramp Diameter + Minimum Ramp
+Diameter** — the exact "does the helix fit in this pocket" parameter pair our V1 Helix
+implementation hardcoded (as tool radius) instead of exposing, and Predrill/Entry Positions for
+the Predrill ramp type.
+
+- **FreeCAD mapping**: `Path.Op.PocketShape` (2.5D) — base clearing concept matches; the vast
+  majority of the above has no FreeCAD property at all and is tracked as real feature work in
+  `docs/ROADMAP.md`, not assumed equivalent.
 
 ## 2D Contour
 

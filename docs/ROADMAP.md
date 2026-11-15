@@ -50,11 +50,15 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       overwrites it — its own docstring says "do not overwrite!") and post-processes the first
       straight plunge into a directly-sampled spiral descent. Verified: monotonic Z descent,
       correct feed-rate propagation from the real tool controller, correct landing position.
-      **V1 scope, stated plainly**: only the operation's very first plunge is ramped (later
-      retract/re-plunge cycles within the same pass are usually re-entering already-cleared air,
-      not solid material) and only "Helix" is implemented — Fusion also has Plunge (already the
-      default/no-op case), Zigzag, Zig, and Profile ramp types, not yet built. Per-level/per-region
-      ramping and the remaining ramp types are tracked follow-ups, not silently dropped scope.
+      **V1 scope, stated plainly**: only the operation's very first plunge is ramped. **Correction
+      from Autodesk's authoritative reference page** (not a forum post this time): Fusion actually
+      has **seven** Ramp Type options, not five — Plunge, Plunge Outside Stock, Zig-Zag, Profile,
+      Smooth Profile, Predrill, Helix. Only Helix is built. Also missing real ramp-geometry
+      parameters Fusion exposes that our V1 hardcoded instead: **Helical Ramp Diameter + Minimum
+      Ramp Diameter** (the real answer to "does the helix fit in this pocket," hardcoded as tool
+      radius in `ops/pocket.py` right now), **Maximum Ramp Stepdown**, **Ramp Clearance Height**,
+      and **Ramp Taper Angle** (a conical helix, distinct from Ramping Angle). Per-level/per-region
+      ramping (every plunge, not just the first) is also still open.
 - [x] Tool selection: Fusion's "Select..." tool-library browser, added alongside the existing
       inline combo (`widgets/tool_picker.py`, cross-cutting — any operation page can use it, used
       first by Pocket). Reuses FreeCAD's own existing `Path.Tool.toolbit.ui.selector.ToolBitSelector`
@@ -69,10 +73,43 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       from — likely a smaller gap than ramps were, but not yet verified against the 4-mode richness
       Fusion exposes (In Control/Wear/Inverse Wear all emit G41/G42, which is a post-processor-level
       concern too, not just the toolpath object)
-- [ ] Pocket Tool tab: inline Speeds & Feeds editing. Fusion lets you set/override spindle speed and
-      cutting/plunge feed directly in the operation's own Tool tab; CAM Studio currently requires
-      leaving the op dialog to edit the separate ToolController object. Flagged directly by Allan
-      from his own Fusion install
+- [ ] Pocket Tool tab: inline Speeds & Feeds editing. Fusion's full field list (confirmed via
+      [Autodesk's reference](https://help.autodesk.com/cloudhelp/ENU/Fusion-CAM/files/GUID67DC60DE-EE42-4BC4-B50D-B28D938D146E.htm)):
+      Spindle Speed, Surface Speed, Ramp Spindle Speed, Cutting Feedrate, Feed per Tooth,
+      Lead-In/Lead-Out/Transition/Ramp/Plunge Feedrates, Feed per Revolution — all editable inline
+      on the operation. CAM Studio currently requires leaving the op dialog to edit the separate
+      ToolController object for any of this. Flagged directly by Allan from his own Fusion install
+- [ ] Pocket Geometry tab: large gap vs. the shared FreeCAD Base Geometry page we currently reuse.
+      Confirmed via Autodesk's reference: Closed/Open/Standing-Boss machining modes (not one
+      generic selection), Extension Method (Tangent/Closest boundary/Parallel) for closing open
+      pockets, Stock Contours (bound the cut area by stock/sketch/edges, not just the raw
+      selection), per-contour clickable cut-direction arrows, Rest Machining sub-parameters
+      (simulated previous Tool Diameter + Corner Radius, not just our on/off toggle), and a full
+      **Tool Orientation** system (Setup WCS / Model / explicit axis selection / named coordinate
+      system, each with its own Origin option) letting one operation cut at an angle to the
+      Setup's WCS — this last one is a substantial feature on its own, not a quick field add
+- [ ] Pocket Passes tab: a full **finishing-pass subsystem** Fusion exposes that we don't have at
+      all — enable toggle, Number of Finishing Passes, per-pass Stepover, "Leads on all Finishing
+      Passes," Finish Feedrate, Repeat Finishing Pass, Finishing Overlap. Also missing: Minimum
+      Cutting Radius (corner blending), Both Ways (alternating climb/conventional with its own
+      Optimal-Load/Feedrate), Use Morphed Spiral Machining, Allow Stepover Cusps, Use Even
+      Stepdowns, Order by Depth, Order by Step, Preserve Order, general Smoothing + Smoothing
+      Deviation, and a **Feed Optimization** corner-slowdown subsystem (Maximum Directional
+      Change, Reduced Feed Radius/Distance/Feedrate, Only Inner Corners)
+- [ ] Pocket Passes tab: **negative Stock to Leave** (radial and axial) for electrode/spark-gap
+      machining — Fusion explicitly supports negative values here; not yet verified whether our
+      `ExtraOffset`/`AxialStockToLeave` properties and the underlying area-clearing call tolerate
+      negative input correctly or would silently misbehave
+- [ ] Pocket Linking tab: **Lead-In/Lead-Out is a separate feature from ramping**, easy to conflate
+      with the ramp work already done — it's the approach/retract arc or line around the cut path
+      itself (Horizontal/Vertical Lead Radius, Sweep Angle, Linear Lead Distance, Perpendicular,
+      "Same as Lead-In"), not the plunge-entry strategy. Also missing: High Feedrate Mode (several
+      rapid-vs-feed-move output strategies) + High Feedrate, Allow Rapid Retract, Safe Distance,
+      Maximum Stay-Down Distance (we have the `KeepToolDown` toggle but not this limit), Lift
+      Height
+- [ ] Pocket Heights tab: FreeCAD's shared Heights+Depths pages give Clearance/Safe/Start/Final;
+      Fusion's Clearance/Retract/Feed/Top/Bottom reads as having a distinct "Feed height" concept
+      that may not map 1:1 — needs verification, not an assumed match
 - [ ] Pocket Passes tab: Chip Thinning (feed-rate compensation when radial engagement/stepover is
       low, to maintain target chip load). Flagged directly by Allan from his own Fusion install —
       not independently confirmed as a named toggle via public-source research (general technique

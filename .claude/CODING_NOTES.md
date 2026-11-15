@@ -8,6 +8,8 @@
 
 ## Fusion 360 CAM spec accuracy
 
+- Before spec'ing an operation from forum posts/blogs, find Autodesk's own per-operation reference page (URL pattern `help.autodesk.com/cloudhelp/ENU/Fusion-CAM/files/GUID....htm`) — it's the authoritative, complete field-by-field list per tab. Forum-sourced research undercounted Pocket's Ramp Type options (5 found vs. 7 actually listed) and missed entire subsystems (finishing passes, feed optimization, tool orientation) that only show up on the reference page.
+
 - When documenting a Fusion operation's parameter as "unique" to it, check the comparable operation's own reference page too. Autodesk often shares controls across dialogs (Pocket and Adaptive Clearing both expose axial/radial stock-to-leave) — don't infer uniqueness from only one op's doc page.
 - Don't conflate adjacent-but-distinct machining terms when paraphrasing a parameter (e.g. Adaptive's "Optimal Load" is a max engagement/stepover limit, not "chip load" — a different, related quantity). Check Autodesk's own wording, don't substitute a closely-associated synonym.
 
