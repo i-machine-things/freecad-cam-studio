@@ -52,9 +52,12 @@ import Path.Op.PocketShape as PathPocketShape
 
 
 class ObjectPocket(PathPocketShape.ObjectPocket):
-    # Hard ceiling on helix ramp segments regardless of requested RampAngle/MaxRampStepdown --
-    # see _buildHelixRampCommands. 2000 segments is already far finer than any real toolpath
-    # needs (segmentsPerTurn=36 means this is ~55 full revolutions at full resolution).
+    # Hard ceilings on helix ramp generation regardless of requested RampAngle/MaxRampStepdown
+    # -- see _buildHelixRampCommands. MAX_RAMP_REVOLUTIONS bounds the actual spiral geometry
+    # (the thing that matters physically); MAX_RAMP_SEGMENTS is a secondary sample-count safety
+    # net that should rarely bind once revolutions are already bounded. 50 revolutions is
+    # already far more than any real single-entry ramp needs.
+    MAX_RAMP_REVOLUTIONS = 50
     MAX_RAMP_SEGMENTS = 2000
 
     def areaOpFeatures(self, obj):
@@ -386,14 +389,26 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             pitch = min(pitch, maxStepdown)
         totalAngle = (height / pitch) * 2 * math.pi
 
+        # MaxRampStepdown has no lower bound on the property itself -- a tiny value (e.g.
+        # 0.00001mm against a 10mm descent) would otherwise demand an astronomically large
+        # totalAngle (millions of radians). CodeRabbit correctly flagged that capping only
+        # numSegments below while leaving that huge totalAngle unchanged doesn't just make a
+        # coarser helix -- each remaining sample's `angle = t * totalAngle` then jumps by
+        # thousands of radians, producing a degenerate, effectively-random-looking zigzag
+        # instead of a spiral. Clamp the revolution count itself (the physical quantity that
+        # actually matters) before deriving numSegments from it, so the geometry stays a
+        # well-formed spiral -- just steeper (more descent per turn) than requested -- at any
+        # input. This also protects the same-shaped case of an extremely shallow RampAngle
+        # over a deep profile, not just an extreme MaxRampStepdown.
+        maxTotalAngle = self.MAX_RAMP_REVOLUTIONS * 2 * math.pi
+        if totalAngle > maxTotalAngle:
+            totalAngle = maxTotalAngle
+
         center = FreeCAD.Vector(start.x - radius, start.y, 0)
         segmentsPerTurn = 36  # 10-degree steps
         numSegments = max(4, round(totalAngle / (2 * math.pi) * segmentsPerTurn))
-        # MaxRampStepdown has no lower bound on the property itself -- a tiny value (e.g.
-        # 0.00001mm against a 10mm descent) would otherwise demand tens of millions of
-        # segments here, freezing FreeCAD / exhausting memory on an accepted input, not just
-        # a malformed one. Cap the segment count; an extreme request just gets a coarser
-        # actual stepdown than asked for instead of an unbounded synchronous allocation.
+        # Secondary safety net -- should rarely bind now that totalAngle itself is bounded
+        # above, but keeps the same hard ceiling in place regardless.
         numSegments = min(numSegments, self.MAX_RAMP_SEGMENTS)
 
         cmds = []
