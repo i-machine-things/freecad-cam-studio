@@ -85,3 +85,29 @@ example of this pattern (Fusion-style grouping/terminology, wired to the same un
 stock-CAM-created object open in our UI instead would require reassigning its `ViewObject.Proxy`
 post-hoc (e.g. on document load) — not attempted yet, since Phase 1's plan is new jobs created
 through our own commands, not re-skinning documents that already exist.
+
+## Closing data-model gaps: the `ops/` subclass pattern
+
+Per `docs/ROADMAP.md`'s parity standard, some Fusion options have no backing property on stock
+CAM's operation classes at all (e.g. `PocketShape` has no Z-axis "stock to leave" concept). Where
+that happens, `ops/<name>.py` subclasses the upstream Proxy class — same pattern as
+`pages/*.py` subclassing `TaskPanelPage`, just one layer lower (data, not Gui) — and overrides the
+specific *documented* extension hook that needs new behavior, rather than patching the upstream
+file or reimplementing the whole operation. Our own `objFactory` (passed to
+`Path.Op.Gui.Base.CommandResources`) creates this subclass instead of stock CAM's.
+
+`ops/pocket.py`'s `ObjectPocket` is the first example: it adds an `AxialStockToLeave` property via
+`initPocketOp` (PocketBase's own documented "overwrite this, not `__init__`" hook) and feeds it
+into `_customDepthParams` (`Path.Op.Area.ObjectOp`'s documented per-op depth-customization hook)
+so the computed toolpath actually stops short of the real `FinalDepth` by that amount — verified
+directly against `depth_params.final_depth`, not just that the property exists.
+
+**Gotcha hit doing this** (logged in `.claude/CODING_NOTES.md`): some upstream methods use the
+Python 2-era `super(self.__class__, self)` pattern instead of a literal class name. Subclassing
+one more level deep than upstream expected causes infinite recursion, since `self.__class__` never
+changes across the recursive calls (`PathPocketShape.ObjectPocket.areaOpFeatures` does this —
+worked around by overriding that method to call `PathPocketBase.ObjectPocket.areaOpFeatures(self,
+obj)` directly). Check every overridden method in the chain for this before subclassing a new op.
+
+The same pattern is how the remaining tracked gaps (ramp/lead-in-out, a real tool-library browser)
+should be built, not treated as permanent documentation footnotes.

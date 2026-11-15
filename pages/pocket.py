@@ -68,7 +68,8 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         form.stepOverPercent = QtWidgets.QSpinBox()
         form.stepOverPercent.setRange(1, 100)
         form.stepOverPercent.setSuffix("%")
-        form.stockToLeave = _quantity_spinbox()
+        form.radialStockToLeave = _quantity_spinbox()
+        form.axialStockToLeave = _quantity_spinbox()
         form.minTravel = QtWidgets.QCheckBox(
             translate("CamStudio_Pocket", "Minimize travel between cuts")
         )
@@ -78,7 +79,12 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         passes_layout.addRow(translate("CamStudio_Pocket", "Pocket Pattern"), form.clearingPattern)
         passes_layout.addRow(translate("CamStudio_Pocket", "Cutting Direction"), form.cutMode)
         passes_layout.addRow(translate("CamStudio_Pocket", "Stepover"), form.stepOverPercent)
-        passes_layout.addRow(translate("CamStudio_Pocket", "Stock to Leave"), form.stockToLeave)
+        passes_layout.addRow(
+            translate("CamStudio_Pocket", "Radial Stock to Leave"), form.radialStockToLeave
+        )
+        passes_layout.addRow(
+            translate("CamStudio_Pocket", "Axial Stock to Leave"), form.axialStockToLeave
+        )
         passes_layout.addRow(form.minTravel)
         passes_layout.addRow(form.useRestMachining)
         layout.addWidget(passes_group)
@@ -103,6 +109,7 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         return form
 
     def initPage(self, obj):
+        self.setIcon(":/icons/CAM_Pocket.svg")
         enumTups = PathPocketShape.ObjectPocket.pocketPropertyEnumerations(dataType="raw")
         self.populateCombobox(
             self.form,
@@ -120,8 +127,10 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             obj.ClearingPattern = str(self.form.clearingPattern.currentData())
         if obj.StepOver != self.form.stepOverPercent.value():
             obj.StepOver = self.form.stepOverPercent.value()
-        if obj.ExtraOffset.Value != _qty_get(self.form.stockToLeave):
-            obj.ExtraOffset = _qty_get(self.form.stockToLeave)
+        if obj.ExtraOffset.Value != _qty_get(self.form.radialStockToLeave):
+            obj.ExtraOffset = _qty_get(self.form.radialStockToLeave)
+        if obj.AxialStockToLeave.Value != _qty_get(self.form.axialStockToLeave):
+            obj.AxialStockToLeave = _qty_get(self.form.axialStockToLeave)
         if obj.ZigZagAngle != _qty_get(self.form.zigZagAngle):
             obj.ZigZagAngle = _qty_get(self.form.zigZagAngle)
         if obj.MinTravel != self.form.minTravel.isChecked():
@@ -141,7 +150,8 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         self.selectInComboBox(obj.CutMode, self.form.cutMode)
         self.selectInComboBox(obj.ClearingPattern, self.form.clearingPattern)
         self.form.stepOverPercent.setValue(obj.StepOver)
-        _qty_set(self.form.stockToLeave, obj.ExtraOffset.Value)
+        _qty_set(self.form.radialStockToLeave, obj.ExtraOffset.Value)
+        _qty_set(self.form.axialStockToLeave, obj.AxialStockToLeave.Value)
         _qty_set(self.form.zigZagAngle, obj.ZigZagAngle)
         self.form.minTravel.setChecked(obj.MinTravel)
         self.form.useRestMachining.setChecked(obj.UseRestMachining)
@@ -157,7 +167,8 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             self.form.cutMode.currentIndexChanged,
             self.form.clearingPattern.currentIndexChanged,
             self.form.stepOverPercent.editingFinished,
-            self.form.stockToLeave.editingFinished,
+            self.form.radialStockToLeave.editingFinished,
+            self.form.axialStockToLeave.editingFinished,
             self.form.zigZagAngle.editingFinished,
             self.form.minTravel.clicked,
             self.form.useRestMachining.clicked,

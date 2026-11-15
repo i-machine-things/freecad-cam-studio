@@ -2,9 +2,10 @@
 
 Wires our own toolbar/menu entry through FreeCAD CAM's existing generic
 op-creation machinery (Path.Op.Gui.Base.CommandResources / CommandPathOp
--- see docs/ARCHITECTURE.md's "Resolved" section), creating the exact
-same PocketShape.ObjectPocket object stock CAM's own "Pocket Shape"
-command creates, but edited through CAM Studio's own page
+-- see docs/ARCHITECTURE.md's "Resolved" section). Creates ops.pocket's
+ObjectPocket (a thin subclass of stock CAM's PocketShape.ObjectPocket
+that adds the "Axial Stock to Leave" property Fusion has and stock CAM
+doesn't -- see ops/pocket.py), edited through CAM Studio's own page
 (pages.pocket.TaskPanelOpPage) instead of stock CAM's.
 """
 
@@ -12,8 +13,8 @@ import FreeCADGui as Gui
 from PySide.QtCore import QT_TRANSLATE_NOOP
 
 import Path.Op.Gui.Base as PathOpGui
-import Path.Op.PocketShape as PathPocketShape
 
+import ops.pocket as CamStudioPocket
 import pages.pocket as CamStudioPocketPage
 
 _res = PathOpGui.CommandResources(
@@ -23,7 +24,7 @@ _res = PathOpGui.CommandResources(
     # upstream op-type string ("Pocket Shape"), or that lookup raises KeyError. Our own
     # branding lives in menuText/toolTip below, which have no such constraint.
     name="Pocket Shape",
-    objFactory=PathPocketShape.Create,
+    objFactory=CamStudioPocket.Create,
     opPageClass=CamStudioPocketPage.TaskPanelOpPage,
     pixmap="CAM_Pocket",
     menuText=QT_TRANSLATE_NOOP("CamStudio_Pocket", "Pocket"),

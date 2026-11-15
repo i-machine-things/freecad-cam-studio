@@ -4,10 +4,24 @@ Full breadth (2.5D milling, 3D, turning, simulation) is the target. Phased so th
 checkable result at the end of each phase rather than one long build with nothing usable until
 the end.
 
+## Parity standard: "100%" means every Fusion option exists here
+
+Per-operation UI/UX must be fully done — every option Fusion 360 exposes for that operation has a
+working CAM Studio equivalent — before moving to the next operation. Where FreeCAD's stock
+`Path.Op.*` class has no property/behavior for a Fusion option, that's not a gap to document and
+skip: it's a feature to build. The sanctioned way to build it: subclass the upstream Proxy class
+in `ops/<name>.py` (never patch `Path/Op/*.py` in place) and hook its *documented* extension
+points — e.g. `initPocketOp` to add a property, `_customDepthParams` to adjust computed depths.
+`ops/pocket.py`'s `AxialStockToLeave` is the first example of this pattern (see below). A gap only
+stays a documented gap, not a built feature, when it's genuinely out of scope for this layer (e.g.
+Autodesk's specific patented toolpath algorithm internals — see Non-goals).
+
 ## Phase 1 — 2.5D milling foundation (current)
 Confirmed against FreeCAD's own upstream source (see [ARCHITECTURE.md](ARCHITECTURE.md)): the
 data/execution layer already exists (`Path.Main.Job.ObjectJob`, `Path.Op.MillFace/Pocket/Profile/
-Adaptive/Drilling`). This phase is a new Gui layer only — no new toolpath engine.
+Adaptive/Drilling`). Builds as a new Gui layer wherever FreeCAD's existing properties/behavior
+already cover a Fusion option; where they don't (see parity standard above), adds small, targeted
+subclasses in `ops/` rather than a whole new toolpath engine.
 - [ ] Finish the behavior spec: Face, Pocket, Contour, Adaptive Clearing, Drilling, Setup/Stock/WCS
 - [x] Map each spec'd operation onto FreeCAD's existing CAM-module operation classes (done —
       see ARCHITECTURE.md's class list)
@@ -22,13 +36,23 @@ Adaptive/Drilling`). This phase is a new Gui layer only — no new toolpath engi
       object stock CAM's "Pocket Shape" command creates, via our own toolbar entry/icon
 - [x] CAM Studio's own Pocket edit dialog (`pages/pocket.py`) — built from scratch (no FreeCAD
       `.ui` resource reused), grouped and labeled to match Fusion's 2D Pocket dialog terminology
-      ("Tool" / "Passes" / "Other Options", "Pocket Pattern", "Cutting Direction", "Stepover",
-      "Stock to Leave") instead of FreeCAD's own layout. Shared Heights/Depths/Geometry pages are
-      still the generic FreeCAD ones (their terminology already closely matches Fusion's Heights
-      tab, so no gap to close there)
+      ("Tool" / "Passes" / "Other Options", "Pocket Pattern", "Cutting Direction", "Stepover")
+      instead of FreeCAD's own layout. Shared Heights/Depths/Geometry pages are still the generic
+      FreeCAD ones (their terminology already closely matches Fusion's Heights tab, so no gap to
+      close there)
+- [x] Pocket: Radial + Axial Stock to Leave (`ops/pocket.py`'s `ObjectPocket` subclass) — stock
+      CAM's `PocketShape` only has one (`ExtraOffset`, radial). Added `AxialStockToLeave` as a real
+      new property wired into `_customDepthParams` (an officially documented extension point),
+      verified to actually shift the computed toolpath depth, not just hold a UI value
+- [ ] Pocket: ramp/lead-in/lead-out (Fusion's Linking tab) — `PocketShape` has **no properties for
+      this at all**; needs new properties plus actual post-processing of the generated path
+      (insert ramp/lead moves), not just a dialog field. Real toolpath-generation work.
+- [ ] Tool selection: Fusion's "Select..." tool-library browser vs. our current inline combo of
+      tool controllers already on the Job. Cross-cutting (every operation's Tool tab needs it) —
+      build once as shared infrastructure, used first by Pocket
 - [ ] Build the Setup → Operations tree UI (PySide/Qt) matching the workflow sequence from the spec
-- [ ] Parameter dialogs for the Phase 1 operation set, backed by the existing `Path.Op.*` objects'
-      own properties (no new property schema)
+- [ ] Parameter dialogs for the remaining Phase 1 operations (Face, Contour, Adaptive, Drilling),
+      each held to the same 100%-parity standard as Pocket above
 - [ ] Check: run the same part through this workbench and FreeCAD's stock CAM workbench, confirm
       both read/edit the same document objects correctly, then compare resulting toolpath
       shape/step sequence against the spec's description (not against Fusion's binary output)
