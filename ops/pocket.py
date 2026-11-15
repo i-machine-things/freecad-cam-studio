@@ -120,6 +120,28 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
                 ),
             )
             obj.MaxRampStepdown = 0
+        if not hasattr(obj, "FinishingPasses"):
+            obj.addProperty(
+                "App::PropertyInteger",
+                "FinishingPasses",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Extra wall-finishing passes stepping down from the roughing Stock to "
+                    "Leave to the true wall. 0 = off",
+                ),
+            )
+            obj.FinishingPasses = 0
+        if not hasattr(obj, "FinishFeedrate"):
+            obj.addProperty(
+                "App::PropertySpeed",
+                "FinishFeedrate",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property", "Feedrate for finishing passes. 0 = same as cutting feed"
+                ),
+            )
+            obj.FinishFeedrate = 0
 
     def _customDepthParams(self, obj, strDep, finDep):
         axial = getattr(obj, "AxialStockToLeave", None)
@@ -153,9 +175,57 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         # Path.Op.Base.execute's own docstring says "do not overwrite!" -- let it build the
         # correct, normal (straight-plunge) toolpath first, then post-process the result.
         result = super().execute(obj)
+
+        finishingPasses = int(getattr(obj, "FinishingPasses", 0))
+        if finishingPasses > 0 and obj.ExtraOffset.Value != 0:
+            self._appendFinishingPasses(obj, finishingPasses)
+
         if getattr(obj, "RampType", "Plunge") == "Helix":
             self._applyHelixRampEntry(obj)
         return result
+
+    def _appendFinishingPasses(self, obj, count):
+        """Fusion's "Finishing Passes": extra wall-cleanup passes stepping the radial Stock
+        to Leave down from its roughing value to 0 (the true wall), using the side of the
+        tool. V1 scope: linear stepdown, optional single shared finish feedrate override.
+        Not yet covered -- tracked in docs/ROADMAP.md: "Leads on all Finishing Passes",
+        "Finishing Overlap", "Repeat Finishing Pass", and a distinct per-pass Stepover (this
+        reuses the roughing StepOver for each finishing pass's own internal geometry, which
+        doesn't matter much since each finishing pass is a single near-wall ring).
+
+        Implementation: re-run the exact same, already-correct execute() pipeline once per
+        pass with ExtraOffset temporarily stepped down -- not a new toolpath algorithm --
+        and concatenate the resulting commands. obj.ExtraOffset is restored to its original
+        (roughing) value before returning, the same restore-after pattern areaOpShapes uses
+        for AxialStockToLeave.
+        """
+        roughingCommands = list(obj.Path.Commands)
+        originalOffset = obj.ExtraOffset.Value
+        finishFeed = getattr(obj, "FinishFeedrate", None)
+        finishFeedValue = finishFeed.Value if finishFeed else 0.0
+
+        allCommands = list(roughingCommands)
+        try:
+            for i in range(1, count + 1):
+                obj.ExtraOffset = originalOffset * (1 - i / count)
+                super().execute(obj)
+                passCommands = list(obj.Path.Commands)
+                if finishFeedValue > 0:
+                    passCommands = [self._withFeedOverride(c, finishFeedValue) for c in passCommands]
+                allCommands += passCommands
+        finally:
+            obj.ExtraOffset = originalOffset
+
+        obj.Path = Path.Path(allCommands)
+        obj.CycleTime = PathOp.getCycleTimeEstimate(obj)
+        self.job.Proxy.getCycleTime()
+
+    def _withFeedOverride(self, cmd, feed):
+        if cmd.Name not in ("G1", "G01", "G2", "G02", "G3", "G03"):
+            return cmd
+        params = dict(cmd.Parameters)
+        params["F"] = feed
+        return Path.Command(cmd.Name, params)
 
     def _applyHelixRampEntry(self, obj):
         if not obj.Path or not obj.Path.Commands:

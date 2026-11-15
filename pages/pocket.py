@@ -86,6 +86,20 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         form.useRestMachining = QtWidgets.QCheckBox(
             translate("CamStudio_Pocket", "Rest machining (skip already-cleared areas)")
         )
+        form.finishingPasses = QtWidgets.QSpinBox()
+        form.finishingPasses.setRange(0, 20)
+        # Plain spinbox, not _quantity_spinbox: Gui::QuantitySpinBox's "unit" property only
+        # accepts FreeCAD's own "preferred display unit" for a Quantity type -- for Velocity
+        # that's "mm/s" in this app's unit-system preference, not the "mm/min" every CNC/CAM
+        # context (including FreeCAD's own ToolController feed fields) actually uses. Forcing
+        # "mm/min" directly onto the widget is silently ignored (falls back to mm/s) -- a real
+        # 60x unit-confusion risk for a feed rate, not just cosmetic. Converting explicitly in
+        # getFields/setFields (FinishFeedrate's own internal unit is mm/s) avoids relying on
+        # that preference at all, regardless of what any particular install has it set to.
+        form.finishFeedrate = QtWidgets.QDoubleSpinBox()
+        form.finishFeedrate.setRange(0, 100000)
+        form.finishFeedrate.setDecimals(2)
+        form.finishFeedrate.setSuffix(" mm/min")
         passes_layout.addRow(translate("CamStudio_Pocket", "Pocket Pattern"), form.clearingPattern)
         passes_layout.addRow(translate("CamStudio_Pocket", "Cutting Direction"), form.cutMode)
         passes_layout.addRow(translate("CamStudio_Pocket", "Stepover"), form.stepOverPercent)
@@ -97,6 +111,13 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         )
         passes_layout.addRow(form.minTravel)
         passes_layout.addRow(form.useRestMachining)
+        passes_layout.addRow(
+            translate("CamStudio_Pocket", "Number of Finishing Passes"), form.finishingPasses
+        )
+        passes_layout.addRow(
+            translate("CamStudio_Pocket", "Finish Feedrate (0 = same as cutting)"),
+            form.finishFeedrate,
+        )
         passes_group.setContentLayout(passes_layout)
         layout.addWidget(passes_group)
 
@@ -202,6 +223,11 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             obj.MinTravel = self.form.minTravel.isChecked()
         if obj.UseRestMachining != self.form.useRestMachining.isChecked():
             obj.UseRestMachining = self.form.useRestMachining.isChecked()
+        if obj.FinishingPasses != self.form.finishingPasses.value():
+            obj.FinishingPasses = self.form.finishingPasses.value()
+        finishFeedMmPerSec = self.form.finishFeedrate.value() / 60.0
+        if obj.FinishFeedrate.Value != finishFeedMmPerSec:
+            obj.FinishFeedrate = finishFeedMmPerSec
         if obj.UseOutline != self.form.useOutline.isChecked():
             obj.UseOutline = self.form.useOutline.isChecked()
         if obj.UseStartPoint != self.form.useStartPoint.isChecked():
@@ -231,6 +257,8 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         _qty_set(self.form.zigZagAngle, obj.ZigZagAngle)
         self.form.minTravel.setChecked(obj.MinTravel)
         self.form.useRestMachining.setChecked(obj.UseRestMachining)
+        self.form.finishingPasses.setValue(obj.FinishingPasses)
+        self.form.finishFeedrate.setValue(obj.FinishFeedrate.Value * 60.0)
         self.form.useOutline.setChecked(obj.UseOutline)
         self.form.useStartPoint.setChecked(obj.UseStartPoint)
         self.selectInComboBox(obj.RampType, self.form.rampType)
@@ -255,6 +283,8 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             self.form.zigZagAngle.editingFinished,
             self.form.minTravel.clicked,
             self.form.useRestMachining.clicked,
+            self.form.finishingPasses.editingFinished,
+            self.form.finishFeedrate.editingFinished,
             self.form.useOutline.clicked,
             self.form.useStartPoint.clicked,
             self.form.toolController.currentIndexChanged,

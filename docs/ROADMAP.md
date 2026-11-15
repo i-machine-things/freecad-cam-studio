@@ -102,9 +102,17 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       **Tool Orientation** system (Setup WCS / Model / explicit axis selection / named coordinate
       system, each with its own Origin option) letting one operation cut at an angle to the
       Setup's WCS — this last one is a substantial feature on its own, not a quick field add
-- [ ] Pocket Passes tab: a full **finishing-pass subsystem** Fusion exposes that we don't have at
-      all — enable toggle, Number of Finishing Passes, per-pass Stepover, "Leads on all Finishing
-      Passes," Finish Feedrate, Repeat Finishing Pass, Finishing Overlap. Also missing: Minimum
+- [x] Pocket Passes tab: **finishing passes** (Number of Finishing Passes + Finish Feedrate).
+      `ops/pocket.py`'s `_appendFinishingPasses` re-runs the same already-correct `execute()`
+      pipeline once per pass with `ExtraOffset` linearly stepped down to 0 (the true wall), then
+      concatenates the resulting commands and overrides their feed if `FinishFeedrate` is set —
+      not a new toolpath algorithm, reuse of the proven one. `FinishFeedrate`'s UI field uses a
+      plain `QDoubleSpinBox` with explicit mm/min conversion (see CODING_NOTES.md — the natural
+      `Gui::QuantitySpinBox` approach silently displays mm/s instead, a real 60x unit-confusion
+      risk for a feed rate, not merely cosmetic). Verified end-to-end: command count scales
+      correctly, finish feed only applies to the appended finishing commands, `ExtraOffset`
+      restored correctly, UI round-trips mm/min correctly. **Not yet built**: per-pass Stepover,
+      "Leads on all Finishing Passes," Repeat Finishing Pass, Finishing Overlap. Also missing: Minimum
       Cutting Radius (corner blending), Both Ways (alternating climb/conventional with its own
       Optimal-Load/Feedrate), Use Morphed Spiral Machining, Allow Stepover Cusps, Use Even
       Stepdowns, Order by Depth, Order by Step, Preserve Order, general Smoothing + Smoothing
