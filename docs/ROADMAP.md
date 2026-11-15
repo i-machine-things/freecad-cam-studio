@@ -79,12 +79,11 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       is well documented, e.g. Autodesk's "Constant Cutter Forces" blog post, but the exact current
       Fusion UI label wasn't found), so verify the exact field/behavior against the real dialog
       before implementing rather than guessing at a checkbox name
-- [ ] All CAM Studio dialogs: collapsible sections matching Fusion's accordion-style
-      disclosure-triangle groups (confirmed visually from Autodesk's own help-page screenshot —
-      "Machining Type"/"Tool" sections each collapse independently). Current `QGroupBox` sections
-      are static/always-expanded — a real interaction-model gap, not just a visual one, flagged
-      directly by Allan. Likely needs a small reusable collapsible-group-box widget in `widgets/`,
-      used by every operation page, not just Pocket
+- [x] All CAM Studio dialogs: collapsible sections matching Fusion's accordion-style
+      disclosure-triangle groups (`widgets/collapsible.py`'s `CollapsibleSection`, cross-cutting —
+      used by every operation page, not just Pocket, same as `widgets/tool_picker.py`). Verified
+      both expanded and collapsed states render and reflow correctly via a real toggle-button
+      click, not just construction
 - [ ] Build the Setup → Operations tree UI (PySide/Qt) matching the workflow sequence from the spec
 - [ ] Parameter dialogs for the remaining Phase 1 operations (Face, Contour, Adaptive, Drilling),
       each held to the same 100%-parity standard as Pocket above

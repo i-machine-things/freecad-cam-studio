@@ -130,11 +130,18 @@ documentation footnotes.
 
 Some gaps aren't operation-specific — every operation's Tool tab needs the same "Select..."
 tool-library button, for example. `widgets/` holds these shared helpers, separate from `pages/`
-(one file per operation) and `ops/` (one file per operation's data-layer Proxy). `widgets/
-tool_picker.py` is the first one: it reuses FreeCAD's own existing `Path.Tool.toolbit.ui.selector.
+(one file per operation) and `ops/` (one file per operation's data-layer Proxy).
+
+`widgets/tool_picker.py` reuses FreeCAD's own existing `Path.Tool.toolbit.ui.selector.
 ToolBitSelector` dialog and `Path.Tool.Controller.Create` factory (the same building blocks stock
 CAM's own Job-creation dialog already uses to let a user pick a tool from the library) rather than
 building a tool-library browser from scratch. A gotcha worth knowing: the built-in tool library is
 lazily seeded on first use elsewhere in stock CAM, so our own code calls
 `Path.Tool.camassets.ensure_assets_initialized(cam_assets)` defensively before opening the
 selector, rather than assuming something else already triggered it.
+
+`widgets/collapsible.py`'s `CollapsibleSection` replaces plain `QGroupBox` sections with Fusion's
+accordion-style disclosure-triangle behavior (confirmed from Autodesk's own help-page screenshot).
+This one isn't a FreeCAD-reuse case -- it's a generic, widely-known Qt UI pattern (a checkable
+`QToolButton` header toggling a hidden content widget), not derived from Autodesk's code or assets.
+Every operation page should use it for its sections instead of `QGroupBox` going forward.

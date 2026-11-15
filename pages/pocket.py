@@ -23,6 +23,7 @@ import Path.Op.Gui.Base as PathOpGui
 import Path.Op.PocketShape as PathPocketShape
 
 import widgets.tool_picker as ToolPicker
+from widgets.collapsible import CollapsibleSection
 
 translate = FreeCAD.Qt.translate
 
@@ -55,8 +56,8 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         form = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(form)
 
-        tool_group = QtWidgets.QGroupBox(translate("CamStudio_Pocket", "Tool"))
-        tool_layout = QtWidgets.QFormLayout(tool_group)
+        tool_group = CollapsibleSection(translate("CamStudio_Pocket", "Tool"))
+        tool_layout = QtWidgets.QFormLayout()
         form.toolController = QtWidgets.QComboBox()
         form.selectToolButton = QtWidgets.QPushButton(translate("CamStudio_Pocket", "Select..."))
         tool_row = QtWidgets.QHBoxLayout()
@@ -65,11 +66,12 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         form.coolantController = QtWidgets.QComboBox()
         tool_layout.addRow(translate("CamStudio_Pocket", "Tool"), tool_row)
         tool_layout.addRow(translate("CamStudio_Pocket", "Coolant"), form.coolantController)
+        tool_group.setContentLayout(tool_layout)
         layout.addWidget(tool_group)
         form.selectToolButton.clicked.connect(self._onSelectTool)
 
-        passes_group = QtWidgets.QGroupBox(translate("CamStudio_Pocket", "Passes"))
-        passes_layout = QtWidgets.QFormLayout(passes_group)
+        passes_group = CollapsibleSection(translate("CamStudio_Pocket", "Passes"))
+        passes_layout = QtWidgets.QFormLayout()
         form.clearingPattern = QtWidgets.QComboBox()
         form.cutMode = QtWidgets.QComboBox()
         form.stepOverPercent = QtWidgets.QSpinBox()
@@ -94,12 +96,13 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         )
         passes_layout.addRow(form.minTravel)
         passes_layout.addRow(form.useRestMachining)
+        passes_group.setContentLayout(passes_layout)
         layout.addWidget(passes_group)
 
         # FreeCAD-specific options with no direct Fusion 2D Pocket equivalent -- labeled
         # plainly rather than force-mapped onto Fusion terminology that doesn't fit.
-        options_group = QtWidgets.QGroupBox(translate("CamStudio_Pocket", "Other Options"))
-        options_layout = QtWidgets.QFormLayout(options_group)
+        options_group = CollapsibleSection(translate("CamStudio_Pocket", "Other Options"))
+        options_layout = QtWidgets.QFormLayout()
         form.useOutline = QtWidgets.QCheckBox(
             translate("CamStudio_Pocket", "Use outline of selected geometry (ignore islands)")
         )
@@ -110,16 +113,18 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         options_layout.addRow(form.useOutline)
         options_layout.addRow(translate("CamStudio_Pocket", "Zig-Zag Angle"), form.zigZagAngle)
         options_layout.addRow(form.useStartPoint)
+        options_group.setContentLayout(options_layout)
         layout.addWidget(options_group)
 
-        linking_group = QtWidgets.QGroupBox(translate("CamStudio_Pocket", "Linking"))
-        linking_layout = QtWidgets.QFormLayout(linking_group)
+        linking_group = CollapsibleSection(translate("CamStudio_Pocket", "Linking"))
+        linking_layout = QtWidgets.QFormLayout()
         form.rampType = QtWidgets.QComboBox()
         form.rampType.addItem(translate("CamStudio_Pocket", "Plunge"), "Plunge")
         form.rampType.addItem(translate("CamStudio_Pocket", "Helix"), "Helix")
         form.rampAngle = _quantity_spinbox(unit="deg")
         linking_layout.addRow(translate("CamStudio_Pocket", "Ramp Type"), form.rampType)
         linking_layout.addRow(translate("CamStudio_Pocket", "Ramp Angle"), form.rampAngle)
+        linking_group.setContentLayout(linking_layout)
         layout.addWidget(linking_group)
 
         layout.addStretch(1)
