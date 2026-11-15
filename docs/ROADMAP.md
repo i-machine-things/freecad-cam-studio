@@ -44,9 +44,17 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       CAM's `PocketShape` only has one (`ExtraOffset`, radial). Added `AxialStockToLeave` as a real
       new property wired into `_customDepthParams` (an officially documented extension point),
       verified to actually shift the computed toolpath depth, not just hold a UI value
-- [ ] Pocket: ramp/lead-in/lead-out (Fusion's Linking tab) — `PocketShape` has **no properties for
-      this at all**; needs new properties plus actual post-processing of the generated path
-      (insert ramp/lead moves), not just a dialog field. Real toolpath-generation work.
+- [x] Pocket: ramp entry, Helix type (Fusion's Linking tab) — `PocketShape` had **no properties or
+      toolpath support for this at all** (confirmed by reading `Path.Op.Area.py`). Added
+      `RampType`/`RampAngle` to `ops/pocket.py`; `execute()` wraps the base class's (never
+      overwrites it — its own docstring says "do not overwrite!") and post-processes the first
+      straight plunge into a directly-sampled spiral descent. Verified: monotonic Z descent,
+      correct feed-rate propagation from the real tool controller, correct landing position.
+      **V1 scope, stated plainly**: only the operation's very first plunge is ramped (later
+      retract/re-plunge cycles within the same pass are usually re-entering already-cleared air,
+      not solid material) and only "Helix" is implemented — Fusion also has Plunge (already the
+      default/no-op case), Zigzag, Zig, and Profile ramp types, not yet built. Per-level/per-region
+      ramping and the remaining ramp types are tracked follow-ups, not silently dropped scope.
 - [ ] Tool selection: Fusion's "Select..." tool-library browser vs. our current inline combo of
       tool controllers already on the Job. Cross-cutting (every operation's Tool tab needs it) —
       build once as shared infrastructure, used first by Pocket

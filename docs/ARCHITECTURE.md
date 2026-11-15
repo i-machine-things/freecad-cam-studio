@@ -109,5 +109,19 @@ changes across the recursive calls (`PathPocketShape.ObjectPocket.areaOpFeatures
 worked around by overriding that method to call `PathPocketBase.ObjectPocket.areaOpFeatures(self,
 obj)` directly). Check every overridden method in the chain for this before subclassing a new op.
 
-The same pattern is how the remaining tracked gaps (ramp/lead-in-out, a real tool-library browser)
+A second example in the same file adds Helix ramp-entry support, where the gap isn't just a
+missing property but missing *toolpath generation* entirely. `Path.Op.Base.ObjectOp.execute()`'s
+own docstring says "do not overwrite!", so the override doesn't replace it: it calls
+`super().execute(obj)` to let the normal, correct pipeline build the straight-plunge toolpath
+first, then post-processes `obj.Path.Commands` afterward, replacing the first straight vertical
+plunge with a directly-sampled spiral descent (plain trigonometry, not `Part.makeHelix` +
+`Path.Geom.cmdsForEdge` — that combination's edge-direction/reversal semantics produced a
+genuinely backwards toolpath in testing, caught by checking the generated Z values were actually
+descending rather than trusting the library call). This is the general lesson for any "FreeCAD
+has literally nothing for this Fusion option" gap: wrap the documented `execute()`/extension-point
+entry, let upstream do what it already does correctly, then add only the missing behavior on top —
+and verify the *generated output* (actual Z values, actual feed rates), not just that code ran
+without an exception.
+
+The same pattern is how the remaining tracked gaps (other ramp types, a real tool-library browser)
 should be built, not treated as permanent documentation footnotes.

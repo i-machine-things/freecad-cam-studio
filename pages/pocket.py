@@ -105,6 +105,16 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         options_layout.addRow(form.useStartPoint)
         layout.addWidget(options_group)
 
+        linking_group = QtWidgets.QGroupBox(translate("CamStudio_Pocket", "Linking"))
+        linking_layout = QtWidgets.QFormLayout(linking_group)
+        form.rampType = QtWidgets.QComboBox()
+        form.rampType.addItem(translate("CamStudio_Pocket", "Plunge"), "Plunge")
+        form.rampType.addItem(translate("CamStudio_Pocket", "Helix"), "Helix")
+        form.rampAngle = _quantity_spinbox(unit="deg")
+        linking_layout.addRow(translate("CamStudio_Pocket", "Ramp Type"), form.rampType)
+        linking_layout.addRow(translate("CamStudio_Pocket", "Ramp Angle"), form.rampAngle)
+        layout.addWidget(linking_group)
+
         layout.addStretch(1)
         return form
 
@@ -141,6 +151,10 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             obj.UseOutline = self.form.useOutline.isChecked()
         if obj.UseStartPoint != self.form.useStartPoint.isChecked():
             obj.UseStartPoint = self.form.useStartPoint.isChecked()
+        if obj.RampType != str(self.form.rampType.currentData()):
+            obj.RampType = str(self.form.rampType.currentData())
+        if obj.RampAngle.Value != _qty_get(self.form.rampAngle):
+            obj.RampAngle = _qty_get(self.form.rampAngle)
 
         self.updateToolController(obj, self.form.toolController)
         self.updateCoolant(obj, self.form.coolantController)
@@ -157,6 +171,8 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         self.form.useRestMachining.setChecked(obj.UseRestMachining)
         self.form.useOutline.setChecked(obj.UseOutline)
         self.form.useStartPoint.setChecked(obj.UseStartPoint)
+        self.selectInComboBox(obj.RampType, self.form.rampType)
+        _qty_set(self.form.rampAngle, obj.RampAngle.Value)
         self.updateZigZagAngleEnabled(obj)
 
         self.setupToolController(obj, self.form.toolController)
@@ -176,4 +192,6 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             self.form.useStartPoint.clicked,
             self.form.toolController.currentIndexChanged,
             self.form.coolantController.currentIndexChanged,
+            self.form.rampType.currentIndexChanged,
+            self.form.rampAngle.editingFinished,
         ]
