@@ -53,12 +53,16 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       **V1 scope, stated plainly**: only the operation's very first plunge is ramped. **Correction
       from Autodesk's authoritative reference page** (not a forum post this time): Fusion actually
       has **seven** Ramp Type options, not five — Plunge, Plunge Outside Stock, Zig-Zag, Profile,
-      Smooth Profile, Predrill, Helix. Only Helix is built. Also missing real ramp-geometry
-      parameters Fusion exposes that our V1 hardcoded instead: **Helical Ramp Diameter + Minimum
-      Ramp Diameter** (the real answer to "does the helix fit in this pocket," hardcoded as tool
-      radius in `ops/pocket.py` right now), **Maximum Ramp Stepdown**, **Ramp Clearance Height**,
-      and **Ramp Taper Angle** (a conical helix, distinct from Ramping Angle). Per-level/per-region
-      ramping (every plunge, not just the first) is also still open.
+      Smooth Profile, Predrill, Helix. Only Helix is built. Added (next commit) `HelicalRampDiameter`
+      / `MinimumRampDiameter` (user-adjustable now, default 1.5x tool diameter) and
+      `MaxRampStepdown`, but **these are not pocket-geometry-aware** — CodeRabbit correctly flagged
+      (PR #1) that a helix sized without checking the actual pocket boundary/islands can swing the
+      cutter into a wall on a small pocket. Real fix needs the pocket's 2D shape at the
+      post-process stage (not available there today) to check the swept area against walls/islands
+      and reject Helix if nothing fits — a "Heavy lift," correctly deferred, not silently skipped;
+      until then this is a user-adjustable-but-unchecked value, documented as such in the code.
+      Still missing: **Ramp Clearance Height**, **Ramp Taper Angle** (conical helix, distinct from
+      Ramping Angle), and per-level/per-region ramping (every plunge, not just the first).
 - [x] Tool selection: Fusion's "Select..." tool-library browser, added alongside the existing
       inline combo (`widgets/tool_picker.py`, cross-cutting — any operation page can use it, used
       first by Pocket). Reuses FreeCAD's own existing `Path.Tool.toolbit.ui.selector.ToolBitSelector`

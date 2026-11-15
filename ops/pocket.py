@@ -85,6 +85,41 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
                 QT_TRANSLATE_NOOP("App::Property", "Helix ramp descent angle"),
             )
             obj.RampAngle = 2.0
+        if not hasattr(obj, "HelicalRampDiameter"):
+            obj.addProperty(
+                "App::PropertyDistance",
+                "HelicalRampDiameter",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Target diameter of the helix ramp entry. 0 = auto (1.5x tool diameter)",
+                ),
+            )
+            obj.HelicalRampDiameter = 0
+        if not hasattr(obj, "MinimumRampDiameter"):
+            obj.addProperty(
+                "App::PropertyDistance",
+                "MinimumRampDiameter",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Smallest acceptable helix ramp diameter -- reduce HelicalRampDiameter "
+                    "toward this for pockets too small to fit the default",
+                ),
+            )
+            obj.MinimumRampDiameter = 0
+        if not hasattr(obj, "MaxRampStepdown"):
+            obj.addProperty(
+                "App::PropertyDistance",
+                "MaxRampStepdown",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Maximum descent per helix revolution. 0 = unconstrained (RampAngle alone "
+                    "determines it)",
+                ),
+            )
+            obj.MaxRampStepdown = 0
 
     def _customDepthParams(self, obj, strDep, finDep):
         axial = getattr(obj, "AxialStockToLeave", None)
@@ -103,24 +138,52 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         if not obj.Path or not obj.Path.Commands:
             return
         cmds = obj.Path.Commands
-        plungeIdx = self._findFirstPlunge(cmds)
-        if plungeIdx is None:
+        found = self._findFirstPlunge(cmds)
+        if found is None:
             return
+        plungeIdx, start, end = found
 
-        prev, plunge = cmds[plungeIdx - 1], cmds[plungeIdx]
-        start = FreeCAD.Vector(prev.Parameters.get("X"), prev.Parameters.get("Y"), prev.Parameters.get("Z"))
-        end = FreeCAD.Vector(plunge.Parameters.get("X"), plunge.Parameters.get("Y"), plunge.Parameters.get("Z"))
-
-        rampCmds = self._buildHelixRampCommands(start, end, self.radius, obj.RampAngle.Value)
+        radius = self._helixRampRadius(obj)
+        rampCmds = self._buildHelixRampCommands(
+            start, end, radius, obj.RampAngle.Value, obj.MaxRampStepdown.Value
+        )
         if not rampCmds:
             return
 
         newCmds = list(cmds[:plungeIdx]) + rampCmds + list(cmds[plungeIdx + 1 :])
         obj.Path = Path.Path(newCmds)
+        # The cycle-time estimate was already computed by super().execute(obj) against the
+        # shorter straight-plunge path -- recompute it now that the path is longer, and
+        # refresh the Job-level total the same way the base execute() does.
+        obj.CycleTime = PathOp.getCycleTimeEstimate(obj)
+        self.job.Proxy.getCycleTime()
+
+    def _helixRampRadius(self, obj):
+        """Resolve the actual helix radius from HelicalRampDiameter/MinimumRampDiameter.
+
+        SAFETY CAVEAT (flagged in PR #1 review, tracked in docs/ROADMAP.md): this value is
+        NOT checked against the pocket's actual boundary or islands -- we don't have that
+        geometry at this post-process stage (see module docstring). On a small pocket, a
+        too-large helix can swing the cutter into a wall. This is a user-adjustable value a
+        human must size sensibly for their geometry, not an automatically pocket-aware or
+        safety-verified one. Real fix (rejecting Helix when nothing fits) needs the pocket's
+        2D shape available here, which it currently isn't."""
+        target = obj.HelicalRampDiameter.Value
+        if target <= 0:
+            target = self.tool.Diameter.Value * 1.5
+        minimum = obj.MinimumRampDiameter.Value
+        if minimum > 0:
+            target = max(target, minimum)
+        return target / 2.0
 
     def _findFirstPlunge(self, cmds):
-        """Return the index of the first straight vertical plunge (G1, same X/Y as the
-        immediately preceding command, Z strictly decreasing), or None if not found."""
+        """Return (index, start, end) for the first straight vertical plunge (G1, same X/Y
+        as the resolved modal position, Z strictly decreasing), or None if not found.
+
+        FreeCAD omits X/Y/Z from a command when it doesn't change from the previous one
+        (modal G-code) -- e.g. a retract is often just `G0 {"Z": ...}` with no X/Y at all.
+        `start`/`end` are resolved from the running last-known position, not read directly
+        off the matched commands' own (possibly incomplete) Parameters."""
         lastX = lastY = lastZ = None
         for i, cmd in enumerate(cmds):
             p = cmd.Parameters
@@ -137,11 +200,11 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
                 and abs(y - lastY) < 1e-6
                 and z < lastZ - 1e-6
             ):
-                return i
+                return i, FreeCAD.Vector(lastX, lastY, lastZ), FreeCAD.Vector(x, y, z)
             lastX, lastY, lastZ = x, y, z
         return None
 
-    def _buildHelixRampCommands(self, start, end, radius, rampAngleDeg):
+    def _buildHelixRampCommands(self, start, end, radius, rampAngleDeg, maxStepdown=0.0):
         """Build a helix descending from `start` to `end` (same X/Y, start.z > end.z) as
         directly-sampled G1 segments, plus a short closing move back to `end`'s exact X/Y
         so the rest of the already-generated toolpath still connects correctly.
@@ -150,6 +213,10 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         entry point itself sits exactly on the circle at angle 0 -- the tool starts cutting
         from right where the original straight plunge was, just descending on a spiral
         instead of straight down.
+
+        `maxStepdown`, if positive, caps the descent per revolution (Fusion's "Maximum Ramp
+        Stepdown" -- constrains tool load during full-width ramping cuts) by using more,
+        shallower revolutions instead of what RampAngle alone would produce.
         """
         height = start.z - end.z
         if height <= 0 or radius <= 0:
@@ -158,6 +225,8 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         pitch = (2 * math.pi * radius) * math.tan(rampAngle)
         if pitch <= 0:
             return None
+        if maxStepdown > 0:
+            pitch = min(pitch, maxStepdown)
         totalAngle = (height / pitch) * 2 * math.pi
 
         center = FreeCAD.Vector(start.x - radius, start.y, 0)

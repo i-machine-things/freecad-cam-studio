@@ -12,8 +12,6 @@ tool-library browser from scratch.
 
 import FreeCAD
 
-from Path.Tool.camassets import cam_assets, ensure_assets_initialized
-from Path.Tool.toolbit.ui.selector import ToolBitSelector
 import Path.Tool.Controller as PathToolController
 
 
@@ -21,6 +19,14 @@ def pick_new_tool_controller(job, parent=None):
     """Open the tool-library browser and create+attach a new ToolController for
     `job` from the user's selection. Returns the new ToolController object, or
     None if the user cancelled or selected nothing."""
+    # Path.Tool.camassets / Path.Tool.toolbit.ui.selector are FreeCAD 1.1+-only modules
+    # (absent in 1.0.2). Importing them at module scope would raise ImportError the moment
+    # InitGui.py's Initialize() imports this module transitively, breaking the *entire*
+    # workbench's toolbar/menu construction on older FreeCAD -- not just tool picking. Keep
+    # the import local so only this function fails (with a clear error) on older FreeCAD.
+    from Path.Tool.camassets import cam_assets, ensure_assets_initialized
+    from Path.Tool.toolbit.ui.selector import ToolBitSelector
+
     # The built-in tool library is lazily seeded on first use elsewhere in stock CAM (e.g.
     # when its own Job-creation dialog or Tool Library dock is opened) -- can't assume that
     # already happened before our own button is clicked, so ensure it here too.
@@ -34,6 +40,10 @@ def pick_new_tool_controller(job, parent=None):
         return None
 
     attached = toolbit.attach_to_doc(doc=FreeCAD.ActiveDocument)
-    tc = PathToolController.Create(name="TC: " + attached.Label, tool=attached)
-    job.Tools.Group = job.Tools.Group + [tc]
+    # job.Proxy.nextToolNumber()/addToolController() (not a manual Tools.Group reassignment)
+    # -- addToolController also wires VertRapid/HorizRapid expressions to the Job's
+    # SetupSheet, which a plain Group append would silently skip.
+    toolNumber = job.Proxy.nextToolNumber()
+    tc = PathToolController.Create(name="TC: " + attached.Label, tool=attached, toolNumber=toolNumber)
+    job.Proxy.addToolController(tc)
     return tc

@@ -6,6 +6,10 @@
 
 - FreeCAD CAM class names can be misleading by similarity, not just by absence. `Path/Op/Pocket.py`'s `ObjectPocket` is the **3D** Pocket op (`FeatureNoFinalDepth`, final depth not editable) — the 2.5D, shape-based Pocket with editable final depth is `Path/Op/PocketShape.py`. Verify against the actual pinned FreeCAD version's source (`raw.githubusercontent.com/FreeCAD/FreeCAD/<tag>/...`) before citing a class in spec/architecture docs — filename pattern-matching isn't enough.
 
+## Doc hygiene
+
+- Never write `[[memory-link-name]]` syntax into actual repo documentation — that's Claude's own cross-memory-file link format, not valid prose or markdown for a human-facing doc. Caught one in `docs/ARCHITECTURE.md` referencing `[[project_freecad_fork]]`; should have been plain prose describing the fork.
+
 ## Fusion 360 CAM spec accuracy
 
 - Before spec'ing an operation from forum posts/blogs, find Autodesk's own per-operation reference page (URL pattern `help.autodesk.com/cloudhelp/ENU/Fusion-CAM/files/GUID....htm`) — it's the authoritative, complete field-by-field list per tab. Forum-sourced research undercounted Pocket's Ramp Type options (5 found vs. 7 actually listed) and missed entire subsystems (finishing passes, feed optimization, tool orientation) that only show up on the reference page.
