@@ -13,12 +13,14 @@ class CamStudioWorkbench(Gui.Workbench):
 
     command_list = [
         "CamStudio_CreateJob",
+        "CamStudio_Pocket",
     ]
 
     def Initialize(self):
         # Deferred import, per FreeCAD's convention of keeping addon startup cost near zero
         # until the workbench is actually activated.
         import commands.create_job  # noqa: F401
+        import commands.create_pocket  # noqa: F401
 
         self.appendToolbar("CAM Studio", self.command_list)
         self.appendMenu("CAM Studio", self.command_list)
