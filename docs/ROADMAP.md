@@ -125,10 +125,17 @@ subclasses in `ops/` rather than a whole new toolpath engine.
 - [ ] Pocket Linking tab: **Lead-In/Lead-Out is a separate feature from ramping**, easy to conflate
       with the ramp work already done — it's the approach/retract arc or line around the cut path
       itself (Horizontal/Vertical Lead Radius, Sweep Angle, Linear Lead Distance, Perpendicular,
-      "Same as Lead-In"), not the plunge-entry strategy. Also missing: High Feedrate Mode (several
-      rapid-vs-feed-move output strategies) + High Feedrate, Allow Rapid Retract, Safe Distance,
-      Maximum Stay-Down Distance (we have the `KeepToolDown` toggle but not this limit), Lift
-      Height
+      "Same as Lead-In"), not the plunge-entry strategy. **Design note from scoping this (not yet
+      built)**: a correct implementation isn't "insert an extra segment after the plunge lands" —
+      the plunge itself needs to target a shifted *approach point* (offset backward along the
+      first cut segment's direction by the lead distance), with the lead-in move then carrying the
+      tool from that approach point into the real path at cutting feed. Treating it as a simple
+      post-insertion (like the ramp/finishing-pass post-processing pattern) would be an
+      under-verified, potentially wrong toolpath — this needs the plunge-target adjustment done
+      properly before shipping, not a rushed version of the existing pattern. Also missing: High
+      Feedrate Mode (several rapid-vs-feed-move output strategies) + High Feedrate, Allow Rapid
+      Retract, Safe Distance, Maximum Stay-Down Distance (we have the `KeepToolDown` toggle but not
+      this limit), Lift Height
 - [ ] Pocket Heights tab: FreeCAD's shared Heights+Depths pages give Clearance/Safe/Start/Final;
       Fusion's Clearance/Retract/Feed/Top/Bottom reads as having a distinct "Feed height" concept
       that may not map 1:1 — needs verification, not an assumed match
