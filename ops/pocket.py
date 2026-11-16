@@ -83,6 +83,13 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
 
     def initPocketOp(self, obj):
         super().initPocketOp(obj)
+        # 2D Offset Roughing always clears with concentric offsets -- that's what the
+        # operation is. Pin the upstream pattern choice to Offset (also on restore, for
+        # documents made before this) and make it read-only in the property editor.
+        if hasattr(obj, "ClearingPattern"):
+            if obj.ClearingPattern != "Offset":
+                obj.ClearingPattern = "Offset"
+            obj.setEditorMode("ClearingPattern", 1)
         if not hasattr(obj, "AxialStockToLeave"):
             obj.addProperty(
                 "App::PropertyDistance",

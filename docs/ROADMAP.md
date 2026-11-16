@@ -319,6 +319,13 @@ Selected contour(s)) and an **Offset**.
 | Ramp Radial Clearance | Missing | Not in any earlier list |
 | Positions: Predrill Positions, Preferred Lead-In Positions, Exit Positions | Missing | Point selections |
 
+### Dialog layout (built 2026-11-15)
+FreeCAD's stacked task-panel bars, lined up with Fusion's tabs:
+**Tool → Base Geometry → Extensions → Heights → Depths → Passes → Linking**. Multi-axis is left out until
+it has fields. Linking holds Leads & Transitions, then Ramp. **Pocket Pattern and Zig-Zag Angle were
+removed** (Allan: "offset means offset"); the op pins `ClearingPattern` to Offset, read-only, also on
+restore.
+
 ### Behavior differences the screenshots show
 - **Leads and Helix ramp work together in Fusion** (both on in the same capture). Ours makes them
   mutually exclusive. That's a gap, not a design choice.
@@ -333,8 +340,8 @@ Selected contour(s)) and an **Offset**.
   section header. Our `CollapsibleSection` has no header checkbox yet.
 - **Tab layout**: Fusion uses six tabs (Tool, Multi-axis, Geometry, Heights, Passes, Linking). Ours
   is one page of collapsible groups beside FreeCAD's shared pages.
-- **Not in Fusion's dialog**: our Pocket Pattern, Zig-Zag Angle, Minimize travel, Use outline,
-  Use custom start point. These are FreeCAD options. Keep them, under Other Options.
+- **Not in Fusion's dialog**: our Minimize travel, Use outline, Use custom start point. These are
+  FreeCAD options. Keep them, under Other Options. (Pocket Pattern and Zig-Zag Angle: removed.)
 - **Chip Thinning** isn't visible in any of these captures. Still blocked on Allan.
 
 ## Phase 2 — 3D operations
