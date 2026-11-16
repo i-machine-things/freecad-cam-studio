@@ -222,8 +222,11 @@ class HeightsBar(PathOpGui.TaskPanelPage):
     every page callback to them, so expressions, the "set from selection" buttons and
     value handling stay exactly upstream's.
 
-    Fusion lists Clearance, Retract, Feed, Top and Bottom height. FreeCAD has no Feed
-    Height; its Safe Height is the retract height and Start/Final Depth are top/bottom."""
+    Fusion lists Clearance, Retract, Feed, Top and Bottom height. Mapped from what
+    FreeCAD's generated G-code actually does (not from the names): the tool rapids down to
+    Safe Height and feeds from there, so Safe Height is Fusion's *Feed* Height; between
+    passes it retracts to Clearance Height, so there is no separate Retract Height; Start
+    and Final Depth are Top and Bottom Height."""
 
     def __init__(self, obj, features, heightsPage, depthsPage):
         self.children = [heightsPage, depthsPage]
@@ -249,11 +252,13 @@ class HeightsBar(PathOpGui.TaskPanelPage):
         rows.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
         for label, tip, field, button in (
             (translate("CamStudio_Pocket", "Clearance Height"),
-             translate("CamStudio_Pocket", "Height for rapid moves clear of everything"),
+             translate("CamStudio_Pocket", "Height for rapid moves clear of everything. "
+                       "The tool also retracts to it between passes (FreeCAD has no "
+                       "separate retract height)"),
              h.clearanceHeight, None),
-            (translate("CamStudio_Pocket", "Retract Height"),
-             translate("CamStudio_Pocket", "Height the tool retracts to between passes "
-                       "(FreeCAD: Safe Height)"),
+            (translate("CamStudio_Pocket", "Feed Height"),
+             translate("CamStudio_Pocket", "The tool rapids down to this height, then "
+                       "feeds from here into the cut (FreeCAD: Safe Height)"),
              h.safeHeight, None),
             (translate("CamStudio_Pocket", "Top Height"),
              translate("CamStudio_Pocket", "Top of the cut (FreeCAD: Start Depth)"),
