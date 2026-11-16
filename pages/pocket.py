@@ -5,8 +5,8 @@ Extensions, Depths, Heights, Operation). Fusion splits the same dialog into
 tabs (Tool, Multi-axis, Geometry, Heights, Passes, Linking). We keep
 FreeCAD's bars and line them up with Fusion's tabs: the single "Operation"
 bar becomes three bars -- Tool, Passes and Linking -- and the bars are
-ordered Tool, Base Geometry, Extensions, Heights, Depths,
-Passes, Linking. Multi-axis is left out until it has fields.
+ordered Tool, Base Geometry, Extensions, Heights, Passes, Linking, with
+FreeCAD's Heights and Depths pages folded into one Heights bar (HeightsBar). Multi-axis is left out until it has fields.
 
 The upstream TaskPanel only knows about one op page (TaskPanelOpPage, the
 Tool bar here). That page adds the Passes and Linking pages to the panel
@@ -141,21 +141,28 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         pages = getattr(parent, "featurePages", None)
         if pages is None or getattr(self, "bars", None):
             return
-        self.bars = [PassesPage(obj, self.features), LinkingPage(obj, self.features)]
+        passes = PassesPage(obj, self.features)
+        self.bars = [passes, LinkingPage(obj, self.features)]
         for bar in self.bars:
             bar.parent = parent
             bar.initPage(obj)
             bar.onDirtyChanged(parent.pageDirtyChanged)
 
-        def rank(page):
-            # Heights before Depths, as Fusion's Heights tab lists clearance/retract first.
-            if isinstance(page, PathOpGui.TaskPanelHeightsPage):
-                return 1
-            if isinstance(page, PathOpGui.TaskPanelDepthsPage):
-                return 2
-            return 0
-
-        upstream = sorted((p for p in pages if p is not self), key=rank)
+        # Fusion has one Heights tab (clearance, retract, top, bottom) and keeps the
+        # stepdowns under Passes. FreeCAD splits these over a Heights and a Depths page.
+        # Fold both into one Heights bar that reuses their (expression-aware) fields and
+        # logic, and move the stepdown fields to the Passes bar.
+        heights = next((p for p in pages if isinstance(p, PathOpGui.TaskPanelHeightsPage)), None)
+        depths = next((p for p in pages if isinstance(p, PathOpGui.TaskPanelDepthsPage)), None)
+        upstream = [p for p in pages if p is not self and p is not heights and p is not depths]
+        if heights is not None and depths is not None:
+            heightsBar = HeightsBar(obj, self.features, heights, depths)
+            heightsBar.parent = parent
+            heightsBar.onDirtyChanged(parent.pageDirtyChanged)
+            passes.addDepthRows(depths.form)
+            upstream.append(heightsBar)
+        else:
+            upstream += [p for p in (heights, depths) if p is not None]
         pages[:] = [self] + upstream + self.bars
 
     def taskPanelBaseLocationPage(self, obj, features):
@@ -206,6 +213,104 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             self.form.toolController.currentIndexChanged,
             self.form.coolantController.currentIndexChanged,
         ]
+
+
+class HeightsBar(PathOpGui.TaskPanelPage):
+    """One Heights bar, as in Fusion, in place of FreeCAD's separate Heights and Depths
+    pages. Those pages are still built (and initialized) by the upstream TaskPanel; this
+    bar takes their field widgets into its own layout under Fusion's names and forwards
+    every page callback to them, so expressions, the "set from selection" buttons and
+    value handling stay exactly upstream's.
+
+    Fusion lists Clearance, Retract, Feed, Top and Bottom height. FreeCAD has no Feed
+    Height; its Safe Height is the retract height and Start/Final Depth are top/bottom."""
+
+    def __init__(self, obj, features, heightsPage, depthsPage):
+        self.children = [heightsPage, depthsPage]
+        self.heightsPage = heightsPage
+        self.depthsPage = depthsPage
+        super().__init__(obj, features)
+        self.panelTitle = "Heights"
+        self.setIcon(":/icons/CAM_Heights.svg")
+        for child in self.children:
+            # A child marking itself dirty (e.g. its "set from selection" button) has to
+            # show up on this bar: the panel only asks the pages in its list.
+            child.onDirtyChanged(lambda _page: self.setDirty())
+
+    def getTitle(self, obj):
+        return translate("CamStudio_Pocket", "Heights")
+
+    def getForm(self):
+        h, d = self.heightsPage.form, self.depthsPage.form
+        form = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(form)
+        section = CollapsibleSection(translate("CamStudio_Pocket", "Heights"))
+        rows = QtWidgets.QFormLayout()
+        rows.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
+        for label, tip, field, button in (
+            (translate("CamStudio_Pocket", "Clearance Height"),
+             translate("CamStudio_Pocket", "Height for rapid moves clear of everything"),
+             h.clearanceHeight, None),
+            (translate("CamStudio_Pocket", "Retract Height"),
+             translate("CamStudio_Pocket", "Height the tool retracts to between passes "
+                       "(FreeCAD: Safe Height)"),
+             h.safeHeight, None),
+            (translate("CamStudio_Pocket", "Top Height"),
+             translate("CamStudio_Pocket", "Top of the cut (FreeCAD: Start Depth)"),
+             d.startDepth, d.startDepthSet),
+            (translate("CamStudio_Pocket", "Bottom Height"),
+             translate("CamStudio_Pocket", "Bottom of the cut (FreeCAD: Final Depth)"),
+             d.finalDepth, d.finalDepthSet),
+        ):
+            if field.isHidden():
+                continue
+            field.setToolTip(tip)
+            if button is not None and not button.isHidden():
+                row = QtWidgets.QHBoxLayout()
+                row.addWidget(field, 1)
+                row.addWidget(button)
+                rows.addRow(label, row)
+            else:
+                rows.addRow(label, field)
+        section.setContentLayout(rows)
+        layout.addWidget(section)
+        layout.addStretch(1)
+        return form
+
+    def initPage(self, obj):
+        pass  # the children were initialized by the upstream TaskPanel
+
+    def getFields(self, obj):
+        for child in self.children:
+            child.getFields(obj)
+
+    def setFields(self, obj):
+        for child in self.children:
+            child.setFields(obj)
+
+    def getSignalsForUpdate(self, obj):
+        return [s for child in self.children for s in child.getSignalsForUpdate(obj)]
+
+    def registerSignalHandlers(self, obj):
+        for child in self.children:
+            child.registerSignalHandlers(obj)
+
+    def pageUpdateData(self, obj, prop):
+        for child in self.children:
+            child.pageUpdateData(obj, prop)
+
+    def updateSelection(self, obj, sel):
+        for child in self.children:
+            child.updateSelection(obj, sel)
+
+    def cleanupPage(self, obj):
+        for child in self.children:
+            child.cleanupPage(obj)
+
+    def setClean(self):
+        super().setClean()
+        for child in getattr(self, "children", []):
+            child.isdirty = False
 
 
 class PassesPage(_BarPage):
@@ -291,8 +396,27 @@ class PassesPage(_BarPage):
         options_group.setContentLayout(options_layout)
         layout.addWidget(options_group)
 
+        # Filled in by addDepthRows once the panel hands over FreeCAD's depth fields.
+        form.depthsGroup = CollapsibleSection(translate("CamStudio_Pocket", "Multiple Depths"))
+        form.depthsLayout = QtWidgets.QFormLayout()
+        form.depthsGroup.setContentLayout(form.depthsLayout)
+        form.depthsGroup.hide()
+        layout.insertWidget(1, form.depthsGroup)
+
         layout.addStretch(1)
         return form
+
+    def addDepthRows(self, depthsForm):
+        """Show FreeCAD's Step Down / Finish Step Down fields (still driven by FreeCAD's
+        Depths page logic, see HeightsBar) here, under Fusion's names."""
+        for label, name in (
+            (translate("CamStudio_Pocket", "Maximum Roughing Stepdown"), "stepDown"),
+            (translate("CamStudio_Pocket", "Finishing Stepdown"), "finishDepth"),
+        ):
+            widget = getattr(depthsForm, name, None)
+            if widget is not None and not widget.isHidden():
+                self.form.depthsLayout.addRow(label, widget)
+                self.form.depthsGroup.show()
 
     def initBar(self, obj):
         self.setIcon(":/icons/CAM_Pocket.svg")

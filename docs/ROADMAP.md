@@ -273,8 +273,8 @@ Five heights, each with a **From** reference (e.g. Retract height, Stock top, To
 Selected contour(s)) and an **Offset**.
 | Fusion field | Status | Notes |
 |---|---|---|
-| Clearance Height | Partial | FreeCAD ClearanceHeight; no From/Offset pair |
-| Retract Height | Partial | Closest is FreeCAD SafeHeight; needs verifying |
+| Clearance Height | Partial | FreeCAD ClearanceHeight, on the Heights bar; no From/Offset pair |
+| Retract Height | Partial | FreeCAD SafeHeight, labeled Retract Height; From/Offset missing; exact equivalence still to verify |
 | Feed Height | Missing | Height where rapid switches to feed. No FreeCAD equivalent |
 | Top Height | Partial | FreeCAD StartDepth |
 | Bottom Height | Partial | FreeCAD FinalDepth |
@@ -323,8 +323,11 @@ Selected contour(s)) and an **Offset**.
 
 ### Dialog layout (built 2026-11-15)
 FreeCAD's stacked task-panel bars, lined up with Fusion's tabs:
-**Tool → Base Geometry → Extensions → Heights → Depths → Passes → Linking**. Multi-axis is left out until
-it has fields. Linking holds Leads & Transitions, then Ramp. **Pocket Pattern and Zig-Zag Angle were
+**Tool → Base Geometry → Extensions → Heights → Passes → Linking**. Multi-axis is left out until
+it has fields. FreeCAD's separate Heights and Depths pages are folded into one **Heights** bar
+(Clearance, Retract = Safe Height, Top = Start Depth, Bottom = Final Depth) that reuses their
+expression-aware fields; Step Down and Finish Step Down moved to **Passes → Multiple Depths** as
+Maximum Roughing Stepdown and Finishing Stepdown. Linking holds Leads & Transitions, then Ramp. **Pocket Pattern and Zig-Zag Angle were
 removed** (Allan: "offset means offset"); the op pins `ClearingPattern` to Offset, read-only, also on
 restore.
 
