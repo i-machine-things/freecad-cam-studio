@@ -625,6 +625,17 @@ class PassesPage(_BarPage):
         # Fusion's "Maximum Stepover" is a distance. FreeCAD stores StepOver as a whole
         # percent of the tool diameter, so the distance is converted (and snaps to 1%).
         form.maxStepover = _quantity_spinbox()
+        # Which way the offset rings progress: FreeCAD's StartAt (Center / Edge).
+        form.clearingOrder = QtWidgets.QComboBox()
+        form.clearingOrder.addItem(translate("CamStudio_Pocket", "Inside out"), "Center")
+        form.clearingOrder.addItem(translate("CamStudio_Pocket", "Outside in"), "Edge")
+        form.clearingOrder.setToolTip(
+            translate(
+                "CamStudio_Pocket",
+                "Inside out: start in the middle and work out to the walls. Outside in: start "
+                "at the walls and work inward. Sideways Compensation stays correct either way.",
+            )
+        )
         form.stepOverPercent = QtWidgets.QSpinBox()
         form.stepOverPercent.setRange(1, 100)
         form.stepOverPercent.setSuffix(" %")
@@ -664,6 +675,7 @@ class PassesPage(_BarPage):
         stepoverRow.addWidget(form.stepOverPercent, 2)
         stepoverRow.addWidget(QtWidgets.QLabel(translate("CamStudio_Pocket", "of tool \u00d8")))
         passes_layout.addRow(translate("CamStudio_Pocket", "Maximum Stepover"), stepoverRow)
+        passes_layout.addRow(translate("CamStudio_Pocket", "Clearing Order"), form.clearingOrder)
         passes_layout.addRow(
             translate("CamStudio_Pocket", "Radial Stock to Leave"), form.radialStockToLeave
         )
@@ -833,6 +845,8 @@ class PassesPage(_BarPage):
     def getFields(self, obj):
         if obj.CutMode != str(self.form.cutMode.currentData()):
             obj.CutMode = str(self.form.cutMode.currentData())
+        if obj.StartAt != str(self.form.clearingOrder.currentData()):
+            obj.StartAt = str(self.form.clearingOrder.currentData())
         self._commitStepover(obj)
         if hasattr(obj, "UseMultipleDepths"):
             for prop, widget in (("UseMultipleDepths", self.form.useMultipleDepths),
@@ -865,6 +879,7 @@ class PassesPage(_BarPage):
     def setFields(self, obj):
         self._fillSidewaysCompensation(obj)
         self.form.cutMode.setCurrentIndex(max(0, self.form.cutMode.findData(obj.CutMode)))
+        self.form.clearingOrder.setCurrentIndex(max(0, self.form.clearingOrder.findData(obj.StartAt)))
         self._showStepover(obj)
         if hasattr(obj, "UseMultipleDepths"):
             self.form.useMultipleDepths.setChecked(obj.UseMultipleDepths)
@@ -883,6 +898,7 @@ class PassesPage(_BarPage):
     def getSignalsForUpdate(self, obj):
         return [
             self.form.cutMode.currentIndexChanged,
+            self.form.clearingOrder.currentIndexChanged,
             self.form.maxStepover.editingFinished,
             self.form.stepOverPercent.editingFinished,
             self.form.useMultipleDepths.clicked,

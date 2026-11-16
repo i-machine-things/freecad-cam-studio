@@ -344,7 +344,8 @@ Selected contour(s)) and an **Offset**.
 | Fusion field | Status | Notes |
 |---|---|---|
 | Tolerance | Missing | |
-| Sideways Compensation | Have | Left/Right, backed by FreeCAD CutMode. With an M3 spindle Left = climb, Right = conventional (verified: climb gives counter-clockwise pocket rings, wall on the tool's right); a reversed spindle swaps the mapping |
+| Sideways Compensation | Have | Left/Right, backed by FreeCAD CutMode; with an M3 spindle Left = climb, Right = conventional, a reversed spindle swaps them. FreeCAD fixes the loop direction regardless of which way rings progress, so outside-in clearing came out backward (Allan caught it); `areaOpPathParams` now flips the direction for outside-in. Verified on real toolpaths: plain and island pockets, both clearing orders, both modes really cut as labelled |
+| Clearing Order (CAM Studio) | Have | Inside out / Outside in toggle on the Passes bar, backed by FreeCAD's StartAt (Center / Edge). Not in Allan's Fusion screenshots; added at his request |
 | Minimum Cutting Radius | Missing | |
 | Preserve Order, Both Ways | Missing | |
 | Maximum Stepover | Have | Distance, as in Fusion, and the same value as a percent on the same row ("Maximum Stepover: [distance] = [%] of tool Ø"), both editable and linked. Stored as FreeCAD's whole-percent StepOver, so the distance snaps to 1% of tool diameter. Follows the tool on tool change |

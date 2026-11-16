@@ -371,6 +371,18 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             )
             obj.LeadOutDistance = 0
 
+    def areaOpPathParams(self, obj, isHole):
+        # FreeCAD turns CutMode into a fixed loop direction (Climb = counter-clockwise),
+        # whichever way the rings progress. That is climb only when clearing inside-out
+        # (uncut material outside each ring). Clearing outside-in (StartAt = Edge) the uncut
+        # material is inside each ring, so the same direction cuts conventional -- Allan saw
+        # Sideways Compensation come out backward there. Flip the direction for outside-in
+        # so Left / climb really climbs either way.
+        params = super().areaOpPathParams(obj, isHole)
+        if getattr(obj, "StartAt", "Center") == "Edge" and "orientation" in params:
+            params["orientation"] = 1 - params["orientation"]
+        return params
+
     def _customDepthParams(self, obj, strDep, finDep):
         axial = getattr(obj, "AxialStockToLeave", None)
         adjustedFinalDepth = finDep + (axial.Value if axial else 0.0)
