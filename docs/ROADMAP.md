@@ -371,6 +371,15 @@ earlier CAM Studio-only library and Setup dialog were replaced).
 - Menu **Add Feeds & Speeds Materials** writes the FeedsAndSpeeds addon's 15 materials (CC-BY,
   credited) into FreeCAD's User library on request.
 
+## Simulate / Inspect / Post Process / Check (2026-11-15)
+FreeCAD CAM's own commands, reused unmodified on a **CAM Studio Actions** toolbar and the CAM
+Studio menu: CAM Simulator (`CAM_SimulatorGL`), Inspect Toolpath (`CAM_Inspect`, also on
+right-click of a Job/op), Post Process (`CAM_Post`), Sanity Check (`CAM_Sanity`). Registered by
+calling FreeCAD CAM's own guarded `Path.GuiInit.Startup()`. Verified: posting a CAM Studio pocket
+through FreeCAD's linuxcnc and grbl posts keeps per-op spindle changes (`M3 S12000` ... back to the
+tool's `M3 S10000`) and emits the arc leads as `G3 ... I J`. Not built: a Fusion-style NC
+Program / post dialog of our own.
+
 ## Phase 2 — 3D operations
 Parallel, Scallop, and other surface-finishing strategies. Spec and implement once Phase 1's UI
 scaffolding exists, since these mostly add new operation types to the same tree/dialog structure.

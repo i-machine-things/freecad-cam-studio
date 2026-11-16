@@ -16,12 +16,20 @@ class CamStudioWorkbench(Gui.Workbench):
         "Separator",
         "CamStudio_Pocket",
     ]
+    # FreeCAD CAM's own commands, reused as-is (registered by Path.GuiInit.Startup below).
+    actions_list = [
+        "CAM_SimulatorGL",
+        "CAM_Inspect",
+        "CAM_Post",
+        "CAM_Sanity",
+    ]
     menu_list = [
         "CamStudio_Job",
         "CamStudio_ImportMaterials",
         "Separator",
         "CamStudio_Pocket",
-    ]
+        "Separator",
+    ] + actions_list
 
     def Initialize(self):
         # Deferred import, per FreeCAD's convention of keeping addon startup cost near zero
@@ -30,7 +38,15 @@ class CamStudioWorkbench(Gui.Workbench):
         import commands.import_materials  # noqa: F401
         import commands.create_pocket  # noqa: F401
 
+        # Simulate / Inspect / Post Process / Check: FreeCAD CAM's own commands. Its GUI
+        # init registers them (guarded, so it runs once even if the CAM workbench loads too).
+        import Path.GuiInit
+
+        Path.GuiInit.Startup()
+        from Path.Main.Gui import SanityCmd  # noqa: F401  (registers CAM_Sanity)
+
         self.appendToolbar("CAM Studio", self.toolbar_list)
+        self.appendToolbar("CAM Studio Actions", self.actions_list)
         self.appendMenu("CAM Studio", self.menu_list)
 
     def Activated(self):
@@ -43,6 +59,13 @@ class CamStudioWorkbench(Gui.Workbench):
 
     def Deactivated(self):
         pass
+
+    def ContextMenu(self, recipient):
+        # As in FreeCAD CAM: right-click a Job or operation to inspect its G-code.
+        selection = Gui.Selection.getSelection()
+        if len(selection) == 1 and selection[0].isDerivedFrom("Path::Feature"):
+            self.appendContextMenu("", "Separator")
+            self.appendContextMenu("", ["CAM_Inspect"])
 
     def GetClassName(self):
         return "Gui::PythonWorkbench"
