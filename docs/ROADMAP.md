@@ -88,8 +88,8 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       via a real button click driving the actual modal dialog, not just the underlying logic.
 - [ ] Contour/Profile: cutter compensation ("Compensation Type" — Off / In Computer / In Control /
       Wear / Inverse Wear, per [Autodesk's reference](https://help.autodesk.com/cloudhelp/ENU/Fusion-CAM/files/GUID89C78618-20FD-4A82-BFB4-BC66AFE417DD.htm)).
-      Confirmed this lives on **2D Contour's** Passes tab specifically, not 2D Pocket's — tracked
-      against the future Contour/Profile operation, not Pocket. FreeCAD's `Path.Op.Profile` already
+      Lives on 2D Contour's Passes tab, **and also on the pocket's Finishing Passes section**
+      (Allan's screenshots, 2026-11-15; this corrects an earlier note saying Contour only). FreeCAD's `Path.Op.Profile` already
       has a partial related property ("Make True, if using Cutter Radius Compensation") to build
       from — likely a smaller gap than ramps were, but not yet verified against the 4-mode richness
       Fusion exposes (In Control/Wear/Inverse Wear all emit G41/G42, which is a post-processor-level
@@ -225,6 +225,115 @@ subclasses in `ops/` rather than a whole new toolpath engine.
 - [ ] Check: run the same part through this workbench and FreeCAD's stock CAM workbench, confirm
       both read/edit the same document objects correctly, then compare resulting toolpath
       shape/step sequence against the spec's description (not against Fusion's binary output)
+
+## Pocket parity map (from Allan's Fusion screenshots, 2026-11-15)
+
+Field-by-field map of Fusion's pocket dialog, taken from Allan's own screenshots of his licensed
+Fusion install (same trust level as observing the live app; field names only, nothing copied).
+**Have** = built and verified. **Partial** = exists but differs from Fusion in a way that matters.
+**Missing** = not built. This is the checklist for the per-operation completeness gate.
+
+**Open question:** this Fusion build titles the dialog **"2D Offset Roughing"**, not "2D Pocket".
+Need Allan to confirm whether 2D Pocket was renamed, or whether this is a separate operation next
+to it. That decides what our command is called.
+
+### Tool tab
+| Fusion field | Status | Notes |
+|---|---|---|
+| Tool + Select... | Have | Combo + `widgets/tool_picker.py` |
+| Edit... (tool) | Missing | Edit the selected tool in place |
+| Feed & Speed: Preset | Missing | Named preset from the tool |
+| Spindle Speed, Surface Speed, Ramp Spindle Speed | Missing | Today these live only on FreeCAD's separate ToolController |
+| Cutting Feedrate, Feed per Tooth | Missing | Same |
+| Lead-In / Lead-Out / Transition / Ramp / Plunge Feedrate | Missing | Our leads and ramps use the ToolController's horizontal/vertical feeds |
+| Plunge Feed per Revolution | Missing | |
+| Coolant | Have | |
+
+### Multi-axis tab (tool orientation)
+| Fusion field | Status | Notes |
+|---|---|---|
+| Machining Type (3 choices, icons only) | Missing | 3-axis is the first; the other two need confirming |
+| Tool Orientation (opt-in section) | Missing | Dropdown, e.g. "Z axis/plane & X axis" |
+| Z Axis / X Axis select, Flip Z / Flip X | Missing | |
+| Align to View, Accessibility Analysis | Missing | |
+| Turn, Tilt (deg) | Missing | |
+| Origin (e.g. Setup WCS origin) | Missing | |
+
+### Geometry tab
+| Fusion field | Status | Notes |
+|---|---|---|
+| Pocket Selections (with selection-mode buttons) | Partial | FreeCAD's shared Base Geometry page; no Fusion-style selection modes |
+| Rest Machining (opt-in section): Tool Diameter, Corner Radius | Partial | We have an on/off checkbox on the Passes group. FreeCAD's `UseRestMachining` uses earlier ops' cleared area; Fusion's version here takes a previous tool's size. Different behavior, and it belongs on this tab |
+| Stock Contours (opt-in section): Stock Selections | Missing | |
+
+### Heights tab
+Five heights, each with a **From** reference (e.g. Retract height, Stock top, Top height,
+Selected contour(s)) and an **Offset**.
+| Fusion field | Status | Notes |
+|---|---|---|
+| Clearance Height | Partial | FreeCAD ClearanceHeight; no From/Offset pair |
+| Retract Height | Partial | Closest is FreeCAD SafeHeight; needs verifying |
+| Feed Height | Missing | Height where rapid switches to feed. No FreeCAD equivalent |
+| Top Height | Partial | FreeCAD StartDepth |
+| Bottom Height | Partial | FreeCAD FinalDepth |
+
+### Passes tab
+| Fusion field | Status | Notes |
+|---|---|---|
+| Tolerance | Missing | |
+| Sideways Compensation | Partial | Fusion shows **Left/Right**; we show "Cutting Direction" Climb/Conventional (FreeCAD CutMode). Same idea, different terms |
+| Minimum Cutting Radius | Missing | |
+| Preserve Order, Both Ways | Missing | |
+| Maximum Stepover | Partial | Fusion takes a **distance** (0.150 in); we take a percent of tool diameter |
+| Use Morphed Spiral Machining, Allow Stepover Cusps | Missing | |
+| Smoothing Deviation | Missing | |
+| **Multiple Depths** (opt-in section) | Partial | We always step down via FreeCAD StepDown on the shared Depths page |
+| - Maximum Roughing Stepdown | Partial | = StepDown |
+| - Finishing Stepdowns (count), Finishing Stepdown | Missing | |
+| - Wall Taper Angle | Missing | |
+| - Finish Only at Final Depth, Rough Final, Use Even Stepdowns | Missing | One more row below these was cut off in the screenshot |
+| **Finishing Passes** (opt-in section) | Partial | |
+| - Compensation Type (e.g. In computer) | Missing | **Corrects the earlier note** that this is Contour-only: it is on the pocket's Finishing Passes too |
+| - Number of Finishing Passes, Finish Feedrate | Have | |
+| - Stepover | Missing | Ours reuses the roughing stepover |
+| - Leads on all Finishing Passes, Repeat Finishing Pass, Finishing Overlap | Missing | |
+| **Stock to Leave** (opt-in section): Radial, Axial | Have | Ours is always on, not an opt-in section |
+| **Smoothing** (opt-in) | Missing | |
+| **Feed Optimization** (opt-in): Maximum Directional Change, Reduced Feed Radius, Reduced Feed Distance, Reduced Feedrate, Only Inner Corners | Missing | |
+
+### Linking tab
+| Fusion field | Status | Notes |
+|---|---|---|
+| High Feedrate Mode (e.g. Preserve rapid moves) | Missing | |
+| Allow Rapid Retract, Safe Distance | Missing | |
+| Keep Tool Down | Partial | FreeCAD `KeepToolDown` exists but isn't on our page |
+| Maximum Stay-Down Distance, Lift Height | Missing | |
+| Lead-In (Entry), Horizontal Lead-In Radius, Lead-In Sweep Angle, Linear Lead-In Distance, Perpendicular | Have | |
+| Vertical Lead-In Radius | Missing | |
+| Lead-Out (Exit), Same as Lead-In | Have | Fusion lists only these two with Same as Lead-In ticked |
+| Ramp Type | Partial | Plunge + Helix of 7 |
+| Ramping Angle, Maximum Ramp Stepdown, Helical Ramp Diameter, Minimum Ramp Diameter | Have | |
+| Ramp Clearance Height | Missing | |
+| Ramp Radial Clearance | Missing | Not in any earlier list |
+| Positions: Predrill Positions, Preferred Lead-In Positions, Exit Positions | Missing | Point selections |
+
+### Behavior differences the screenshots show
+- **Leads and Helix ramp work together in Fusion** (both on in the same capture). Ours makes them
+  mutually exclusive. That's a gap, not a design choice.
+- **Default values seen in the capture** (no tool was selected, so these may be fallbacks rather
+  than tool-derived): lead radii 0.025 in, sweep 90 deg, linear lead 0.025 in, Lead-In and Lead-Out
+  both on; ramp angle 2 deg, max ramp stepdown 0.025 in, ramp clearance height 0.100 in, helical
+  ramp diameter 0.237 in, minimum 0.125 in; stepover 0.150 in, roughing stepdown 0.025 in; Keep Tool
+  Down on, max stay-down 2.00 in; feed optimization 25 deg / 0.013 in / 0.050 in / 10 in/min.
+  Ours default leads to 0 (off).
+- **Opt-in sections**: Multiple Depths, Finishing Passes, Stock to Leave, Smoothing, Feed
+  Optimization, Rest Machining, Stock Contours and Tool Orientation each have a checkbox on the
+  section header. Our `CollapsibleSection` has no header checkbox yet.
+- **Tab layout**: Fusion uses six tabs (Tool, Multi-axis, Geometry, Heights, Passes, Linking). Ours
+  is one page of collapsible groups beside FreeCAD's shared pages.
+- **Not in Fusion's dialog**: our Pocket Pattern, Zig-Zag Angle, Minimize travel, Use outline,
+  Use custom start point. These are FreeCAD options. Keep them, under Other Options.
+- **Chip Thinning** isn't visible in any of these captures. Still blocked on Allan.
 
 ## Phase 2 — 3D operations
 Parallel, Scallop, and other surface-finishing strategies. Spec and implement once Phase 1's UI
