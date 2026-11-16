@@ -46,7 +46,9 @@ are what this project replaces, and nothing else.
   operations does. The object's `Proxy` (set in `ops/pocket.py`'s `Create`) and `ViewObject.Proxy`
   (`pages.pocket`) both point at addon modules — vanilla FreeCAD can't import either without the
   addon installed, so it can neither restore the data proxy nor recompute the operation (not just
-  "can't open its edit panel").
+  "can't open its edit panel"). The same goes for Jobs CAM Studio has adopted: their
+  `ViewObject.Proxy` is `pages.setup.JobViewProvider`, so without the addon FreeCAD can't load
+  that view provider (the Job's data itself is stock CAM's and unaffected).
 - **Installable via FreeCAD's Addon Manager** like any other community workbench, once published.
 - **Upstream CAM improvements (bug fixes, new ops) are inherited for free** — this project only
   ever adds a new Gui layer alongside the existing one, never patches `Path/Op/*.py` or

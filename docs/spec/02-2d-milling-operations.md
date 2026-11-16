@@ -98,9 +98,12 @@ the Predrill ramp type.
 
 Purpose: machine along a profile — usually a finishing pass, but can take multiple roughing cuts
 too (not finishing-only).
-- Tabs (small uncut bridges holding the part to stock) are a named option here, set under a
-  Heights/Passes-style section of the dialog — relevant for thin stock (plastic/wood) that would
-  otherwise flex or fly loose once fully cut free. A commonly cited rule of thumb: ~4 tabs per
+- Tabs (small uncut bridges holding the part to stock) are a named option here, set on the
+  **Geometry** tab (after Stock Contours, before Rest Machining, per
+  [Autodesk's 2D Contour reference](https://help.autodesk.com/cloudhelp/ENU/Fusion-CAM/files/GUID75B6821B-DE26-4E3B-AF10-4A54131CD9E4.htm):
+  Tab Shape, Tab Width, Tab Height, Tab Positioning with Tab Distance or number of tabs, manual
+  tabs) — relevant for thin stock (plastic/wood) that would otherwise flex or fly loose once
+  fully cut free. A commonly cited rule of thumb: ~4 tabs per
   part is usually enough, though this is a community heuristic, not an Autodesk spec value.
 - **FreeCAD mapping**: `Path Profile` operation. Tab support needs to be checked against FreeCAD's
   current Profile op (open item for Phase 1).
