@@ -62,6 +62,29 @@ class MaterialRow:
         row.addWidget(change)
         # Right under the stock-type / Refresh row.
         layout.insertLayout(1, row)
+        # FreeCAD replaces the Stock object on Refresh or a stock-type change, and the new one
+        # comes without the old material. Follow those changes: carry the machining material
+        # over (it belongs to the setup, as in Fusion) and keep the row showing what feed
+        # defaults will use. Deferred so FreeCAD's own handler has replaced the stock first.
+        from PySide import QtCore
+
+        self.lastMaterial = None
+        refresh = lambda *_: QtCore.QTimer.singleShot(0, self._afterStockChange)
+        stockCombo = form.findChild(QtWidgets.QComboBox, "stock")
+        refreshButton = form.findChild(QtWidgets.QAbstractButton, "refreshStock")
+        if stockCombo is not None:
+            stockCombo.currentIndexChanged.connect(refresh)
+        if refreshButton is not None:
+            refreshButton.clicked.connect(refresh)
+        self._refresh()
+
+    def _afterStockChange(self):
+        from cs_materials import library
+
+        if library.stockMaterial(self.job) is None and self.lastMaterial is not None:
+            stock = getattr(self.job, "Stock", None)
+            if stock is not None and hasattr(stock, "ShapeMaterial"):
+                stock.ShapeMaterial = self.lastMaterial
         self._refresh()
 
     def _material(self):
@@ -74,6 +97,7 @@ class MaterialRow:
         material = self._material()
         machining = library.stockMaterial(self.job)
         if machining is not None:
+            self.lastMaterial = machining
             self.name.setText(machining.Name)
             self.name.setToolTip("")
         elif material is not None and getattr(material, "Name", ""):

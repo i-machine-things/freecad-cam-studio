@@ -73,7 +73,9 @@ class CommandJob:
             proxy.deleteOnReject = True
             proxy.editObject(job.Stock)
         else:
-            proxy.openTaskPanel()
+            # FreeCAD's guarded edit entry, as a double-click uses: runs the Job integrity
+            # check (e.g. rebuilds a deleted Tools group) before opening Job Edit.
+            Gui.getDocument(job.Document.Name).setEdit(job.ViewObject, 0)
 
 
 Gui.addCommand("CamStudio_Job", CommandJob())
