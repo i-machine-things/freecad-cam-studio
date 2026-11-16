@@ -209,12 +209,13 @@ subclasses in `ops/` rather than a whole new toolpath engine.
 - [ ] Pocket Heights tab: FreeCAD's shared Heights+Depths pages give Clearance/Safe/Start/Final;
       Fusion's Clearance/Retract/Feed/Top/Bottom reads as having a distinct "Feed height" concept
       that may not map 1:1 — needs verification, not an assumed match
-- [ ] Pocket Passes tab: Chip Thinning (feed-rate compensation when radial engagement/stepover is
-      low, to maintain target chip load). Flagged directly by Allan from his own Fusion install —
-      not independently confirmed as a named toggle via public-source research (general technique
-      is well documented, e.g. Autodesk's "Constant Cutter Forces" blog post, but the exact current
-      Fusion UI label wasn't found), so verify the exact field/behavior against the real dialog
-      before implementing rather than guessing at a checkbox name
+- [x] Chip Thinning (Allan confirmed the behavior, 2026-11-15): a **checkbox on the toolpath's
+      Tool bar** (Feed & Speed), not Passes. With stepover ae < D/2 the cutting feed is divided by
+      RCTF = sqrt(1 - (1 - 2*ae/D)^2) so real chip thickness stays at the chipload; plunge, ramp
+      and lead feeds are unchanged. The bar shows the factor and effective feed, updating when
+      the stepover changes on the Passes bar. Known limit: engagement is higher than the
+      stepover in corners and on the first full-width cut, where the raised feed still applies.
+      The label "Chip Thinning" is ours; Fusion's exact label is still unconfirmed.
 - [x] All CAM Studio dialogs: collapsible sections matching Fusion's accordion-style
       disclosure-triangle groups (`widgets/collapsible.py`'s `CollapsibleSection`, cross-cutting —
       used by every operation page, not just Pocket, same as `widgets/tool_picker.py`). Verified
@@ -369,8 +370,9 @@ and Setup dialog were replaced; Allan: "I don't want to reinvent the wheel").
   in `User/CAM Studio/` (reused on later edits). A dangling model-folder setting after
   uninstall is harmless (verified). Not verified: editing such a material in vanilla FreeCAD's
   material editor may drop the tables.
-- **UI**: FreeCAD's Job Edit, plus a labelled **Material: <name> [Change...] [Chipload...]** row
-  in its Stock section (replaces the unlabelled material button). Double-click a Job, or the
+- **UI**: FreeCAD's Job Edit, plus a labelled **Material: <name> [Change...]** row
+  in its Stock section (replaces the unlabelled material button). The material's chipload
+  tables are edited from a toolpath's Tool bar (**Material Chipload...**), not Job Edit. Double-click a Job, or the
   toolbar's **Job** button, opens it. Menu: **Add Feeds & Speeds Materials** writes the
   FeedsAndSpeeds addon's 15 materials (CC-BY, credited) into the User library on request.
 - **Defaults**: rpm = 1000*Vc/(pi*D) (no spindle cap); chipload = tool's own Chipload, else the

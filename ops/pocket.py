@@ -170,6 +170,20 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             if not hasattr(obj, name):
                 obj.addProperty(ptype, name, "Feed & Speed", QT_TRANSLATE_NOOP("App::Property", doc))
                 added = True
+        if not hasattr(obj, "ChipThinning"):
+            # Separate from the feeds above: adding it to an older document must not count as
+            # "feeds missing" and re-seed feeds the user already set.
+            obj.addProperty(
+                "App::PropertyBool",
+                "ChipThinning",
+                "Feed & Speed",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Raise the cutting feed when the stepover is under half the tool diameter, "
+                    "so the actual chip thickness stays at the chipload",
+                ),
+            )
+            obj.ChipThinning = False
         if added and getattr(obj, "ToolController", None) is not None:
             # Restoring a document made before these existed: start from its tool.
             self.loadFeedsFromTool(obj)
@@ -380,12 +394,27 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             return None
         return library.defaultFeedsFor(job, tc.Tool)
 
+    @staticmethod
+    def chipThinningFactor(obj):
+        """Radial chip thinning: with a radial engagement (stepover) ae under half the tool
+        diameter D, a chip is thinner than the feed per tooth by
+            RCTF = sqrt(1 - (1 - 2*ae/D)^2),
+        so the cutting feed is divided by RCTF to keep the real chip thickness at the
+        chipload. 1.0 when off or ae >= D/2. ae is the pocket's StepOver (% of D); note the
+        engagement is higher than that in corners and on the first, full-width cut."""
+        if not getattr(obj, "ChipThinning", False):
+            return 1.0
+        ratio = max(0.0, min(1.0, float(getattr(obj, "StepOver", 100)) / 100.0))
+        if ratio >= 0.5 or ratio <= 0:
+            return 1.0
+        return 1.0 / math.sqrt(1.0 - (1.0 - 2.0 * ratio) ** 2)
+
     def opExecute(self, obj, *args, **kwargs):
         # Base.execute has just read the tool controller's feeds into self.horizFeed /
         # self.vertFeed; replace them with this op's own before the toolpath is generated,
         # so every move upstream emits carries the op's feeds.
         if hasattr(obj, "CuttingFeedrate"):
-            self.horizFeed = obj.CuttingFeedrate.Value
+            self.horizFeed = obj.CuttingFeedrate.Value * self.chipThinningFactor(obj)
             self.vertFeed = obj.PlungeFeedrate.Value
         return super().opExecute(obj, *args, **kwargs)
 

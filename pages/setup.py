@@ -3,13 +3,13 @@
 The setup (Job) is edited in FreeCAD's own Job Edit panel -- stock, coordinate system,
 post processor, tools -- unchanged. CAM Studio adds one row to its Stock section:
 
-    Material: <stock material>   [Change...]  [Chipload...]
+    Material: <stock material>   [Change...]
 
 - Change... opens FreeCAD's own machining-material picker (the same one as the panel's
   unlabelled material button, which this row replaces) and stores the choice where stock
   CAM keeps it: the Job's Stock.ShapeMaterial.
-- Chipload... edits CAM Studio's chipload tables for that material (cs_materials), which,
-  with the material's surface speeds, drive each operation's default feeds and speeds.
+The material's surface speeds -- and CAM Studio's chipload tables for it, edited from an
+operation's Tool bar (pages/pocket.py) -- drive each operation's default feeds and speeds.
 
 It's added by JobViewProvider, a thin subclass of FreeCAD's Job view provider: Jobs created
 with CAM Studio's Job button get it, and existing Jobs are switched over while CAM Studio is
@@ -59,17 +59,7 @@ class MaterialRow:
         change = QtWidgets.QPushButton(translate("CamStudio_Setup", "Change..."))
         change.setToolTip(translate("CamStudio_Setup", "Pick the stock material (FreeCAD's machining materials)"))
         change.clicked.connect(self._change)
-        self.chipload = QtWidgets.QPushButton(translate("CamStudio_Setup", "Chipload..."))
-        self.chipload.setToolTip(
-            translate(
-                "CamStudio_Setup",
-                "Feed per tooth by tool diameter for this material (CAM Studio). Drives "
-                "default feeds; spindle speed comes from the material's surface speed.",
-            )
-        )
-        self.chipload.clicked.connect(self._editChipload)
         row.addWidget(change)
-        row.addWidget(self.chipload)
         # Right under the stock-type / Refresh row.
         layout.insertLayout(1, row)
         self._refresh()
@@ -99,26 +89,11 @@ class MaterialRow:
             )
         else:
             self.name.setText(translate("CamStudio_Setup", "(none)"))
-        self.chipload.setEnabled(machining is not None)
 
     def _change(self):
         # FreeCAD's own picker and assignment (stores Stock.ShapeMaterial).
         self.taskPanel.assignMaterial()
         self._refresh()
-
-    def _editChipload(self):
-        from cs_materials import library
-        from widgets.chipload_editor import ChiploadDialog
-
-        material = library.stockMaterial(self.job)
-        if material is None:
-            return
-        dialog = ChiploadDialog(material, Gui.getMainWindow())
-        if dialog.exec_() and dialog.saved is not None:
-            if dialog.saved.UUID != material.UUID:
-                # A built-in material got an inheriting User-library copy: use that.
-                self.job.Stock.ShapeMaterial = dialog.saved
-            self._refresh()
 
 
 def adoptJob(job):

@@ -165,12 +165,25 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         form.rampFeedrate = _rate_box(feedUnit, feedDecimals)
         form.plungeFeedrate = _rate_box(feedUnit, feedDecimals)
         form.plungeFeedPerRev = _rate_box(lenUnit, lenDecimals, 1000)
+        form.chipThinning = QtWidgets.QCheckBox(translate("CamStudio_Pocket", "Chip Thinning"))
+        form.chipThinning.setToolTip(
+            translate(
+                "CamStudio_Pocket",
+                "With a stepover under half the tool diameter, chips come out thinner than the "
+                "feed per tooth. This raises the cutting feed to bring them back to the "
+                "chipload. Engagement is higher in corners and on the first, full-width cut.",
+            )
+        )
+        form.chipThinningInfo = QtWidgets.QLabel()
+        form.chipThinningInfo.setWordWrap(True)
         for label, widget in (
             ("Spindle Speed", form.spindleSpeed),
             ("Surface Speed", form.surfaceSpeed),
             ("Ramp Spindle Speed", form.rampSpindleSpeed),
             ("Cutting Feedrate", form.cuttingFeedrate),
             ("Feed per Tooth", form.feedPerTooth),
+            (None, form.chipThinning),
+            (None, form.chipThinningInfo),
             ("Lead-In Feedrate", form.leadInFeedrate),
             ("Lead-Out Feedrate", form.leadOutFeedrate),
             ("Ramp Feedrate", form.rampFeedrate),
@@ -178,7 +191,10 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             ("Plunge Feed per Revolution", form.plungeFeedPerRev),
             ("Coolant", form.coolantController),
         ):
-            fs_layout.addRow(translate("CamStudio_Pocket", label), widget)
+            if label is None:
+                fs_layout.addRow(widget)
+            else:
+                fs_layout.addRow(translate("CamStudio_Pocket", label), widget)
         # Re-apply the defaults for the current tool and stock material (Fusion fills an
         # operation from the tool preset the same way when the tool is picked).
         form.resetFeeds = QtWidgets.QPushButton(translate("CamStudio_Pocket", "Reset to Defaults"))
@@ -192,8 +208,23 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         form.resetFeeds.clicked.connect(self._onResetFeeds)
         form.feedSource = QtWidgets.QLabel()
         form.feedSource.setWordWrap(True)
-        fs_layout.addRow(form.resetFeeds)
+        form.materialChipload = QtWidgets.QPushButton(
+            translate("CamStudio_Pocket", "Material Chipload...")
+        )
+        form.materialChipload.setToolTip(
+            translate(
+                "CamStudio_Pocket",
+                "Edit the stock material's feed per tooth by tool diameter (used by Reset to "
+                "Defaults and for new operations)",
+            )
+        )
+        form.materialChipload.clicked.connect(self._onMaterialChipload)
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.addWidget(form.resetFeeds)
+        buttons.addWidget(form.materialChipload)
+        fs_layout.addRow(buttons)
         fs_layout.addRow(form.feedSource)
+        form.chipThinning.clicked.connect(self._refreshDerived)
         fs_group.setContentLayout(fs_layout)
         layout.addWidget(fs_group)
         # Keep each derived field and its partner in step as either is edited.
@@ -307,11 +338,25 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             box.setProperty("camStudioLoaded", box.value())
         f.spindleSpeed.setProperty("camStudioLoaded", f.spindleSpeed.value())
         f.rampSpindleSpeed.setProperty("camStudioLoaded", f.rampSpindleSpeed.value())
+        f.chipThinning.setChecked(bool(getattr(obj, "ChipThinning", False)))
+        f.materialChipload.setEnabled(self._stockHasMachiningMaterial(obj))
         self._refreshDerived()
         try:
             f.feedSource.setText(self._describeDefaults(obj))
         except Exception as e:
             f.feedSource.setText(str(e))
+
+    def updateData(self, obj, prop):
+        # Stepover lives on the Passes bar; keep the chip-thinning line in step with it.
+        if prop in ("StepOver", "ChipThinning") and hasattr(self.form, "chipThinningInfo"):
+            self._refreshChipThinning()
+
+    def _stockHasMachiningMaterial(self, obj):
+        import PathScripts.PathUtils as PathUtils
+        from cs_materials import library
+
+        job = PathUtils.findParentJob(obj)
+        return job is not None and library.stockMaterial(job) is not None
 
     def _commitFeedFields(self, obj):
         # Only write a field the user changed since it was loaded (the boxes round to their
@@ -325,6 +370,8 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             if box.value() != box.property("camStudioLoaded"):
                 setattr(obj, prop, box.value() * f.feedScale)
                 box.setProperty("camStudioLoaded", box.value())
+        if hasattr(obj, "ChipThinning") and obj.ChipThinning != f.chipThinning.isChecked():
+            obj.ChipThinning = f.chipThinning.isChecked()
 
     def _refreshDerived(self):
         f = self.form
@@ -336,6 +383,35 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         f.feedPerTooth.setValue(cutting / (rpm * flutes) / f.lenScale if rpm > 0 and flutes > 0 else 0)
         f.feedPerTooth.setEnabled(flutes > 0)
         f.plungeFeedPerRev.setValue(plunge / rpm / f.lenScale if rpm > 0 else 0)
+        self._refreshChipThinning()
+
+    def _refreshChipThinning(self):
+        f = self.form
+        obj = self.obj
+        on = f.chipThinning.isChecked()
+        stepover = float(getattr(obj, "StepOver", 100))
+        if not on:
+            f.chipThinningInfo.setText("")
+            f.chipThinningInfo.hide()
+            return
+        f.chipThinningInfo.show()
+        probe = type("Probe", (), {"ChipThinning": True, "StepOver": stepover})()
+        factor = obj.Proxy.chipThinningFactor(probe)
+        if factor == 1.0:
+            f.chipThinningInfo.setText(
+                translate(
+                    "CamStudio_Pocket",
+                    "No change at %.0f%% stepover (applies under 50%%).",
+                )
+                % stepover
+            )
+            return
+        effective = f.cuttingFeedrate.value() * factor
+        f.chipThinningInfo.setText(
+            translate("CamStudio_Pocket", "At %.0f%% stepover: cutting feed x%.2f = %s %s")
+            % (stepover, factor, ("%%.%df" % f.cuttingFeedrate.decimals()) % effective,
+               f.cuttingFeedrate.suffix().strip())
+        )
 
     def _onSurfaceSpeedEdited(self):
         f = self.form
@@ -352,6 +428,22 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             mmPerMin = f.feedPerTooth.value() * f.lenScale * rpm * flutes
             f.cuttingFeedrate.setValue(mmPerMin / 60.0 / f.feedScale)
             f.cuttingFeedrate.editingFinished.emit()
+
+    def _onMaterialChipload(self):
+        import PathScripts.PathUtils as PathUtils
+        from cs_materials import library
+        from widgets.chipload_editor import ChiploadDialog
+
+        job = PathUtils.findParentJob(self.obj)
+        material = library.stockMaterial(job) if job is not None else None
+        if material is None:
+            return
+        dialog = ChiploadDialog(material, self.form)
+        if dialog.exec_() and dialog.saved is not None:
+            if dialog.saved.UUID != material.UUID:
+                # A built-in material got an inheriting User-library copy: use that.
+                job.Stock.ShapeMaterial = dialog.saved
+            self.form.feedSource.setText(self._describeDefaults(self.obj))
 
     def _onResetFeeds(self):
         obj = self.obj
@@ -417,6 +509,7 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             f.coolantController.currentIndexChanged,
             f.spindleSpeed.editingFinished,
             f.rampSpindleSpeed.editingFinished,
+            f.chipThinning.clicked,
         ] + [box.editingFinished for _prop, box in self._feedFields()]
 
 
