@@ -365,8 +365,11 @@ Allan's request: a material library, picked per setup, driving default feeds and
   cutting (and lead-in/out) = fz·flutes·rpm; plunge (and ramp) = fz·rpm. Applied when an op is
   created or its tool changes; anything the material can't supply stays at the tool
   controller's value.
-- **Setup dialog** (`pages/setup.py`, Allan chose our own over a Job property): opens after
-  New Setup and from **Edit Setup**. Setup bar (name, models) and Stock bar (Stock Material,
+- **Setup dialog** (`pages/setup.py`, Allan chose our own over a Job property): opens by
+  **double-clicking the Job** (CAM Studio's Job view provider, a thin subclass of FreeCAD's;
+  Jobs from stock CAM are switched over when CAM Studio is active) and from the toolbar's
+  single **Job** button (with solids selected it creates a Job, with a Job selected it opens
+  that Job's setup; its dropdown also holds Material Library). No separate New/Edit Setup. Setup bar (name, models) and Stock bar (Stock Material,
   summary, Edit Material Library, optional reset of existing ops). Stored as a
   `StockMaterial` string on the Job.
 - **Not built yet in the Setup dialog**: WCS/orientation, stock size and shape, post-processor

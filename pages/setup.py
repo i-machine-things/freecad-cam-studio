@@ -1,5 +1,9 @@
 """CAM Studio's Setup dialog (Fusion's Setup), first version.
 
+Opened by double-clicking a Job (JobViewProvider below) and right after New Setup, the way
+Fusion opens a setup. FreeCAD's own Job editor is still one button away on the Setup bar,
+and double-clicking a Job's Model or Stock item still opens FreeCAD's editor on that tab.
+
 A task panel for a CAM Job, laid out as stacked bars like the operation dialog:
 - Setup: the setup's name and the models it machines.
 - Stock: the stock material, picked from CAM Studio's material library
@@ -15,6 +19,8 @@ use -- a dynamic property, so the document still opens in plain FreeCAD).
 import FreeCAD
 import FreeCADGui as Gui
 from PySide import QtGui, QtWidgets
+
+import Path.Main.Gui.Job as PathJobGui
 
 from materials import library
 from widgets.collapsible import CollapsibleSection
@@ -33,20 +39,87 @@ def ensureStockMaterialProperty(job):
         )
 
 
-def jobForSelection():
-    """The Job of the selected object (a Job, or anything inside one), else the document's
-    only Job, else None."""
-    import PathScripts.PathUtils as PathUtils
+class JobViewProvider(PathJobGui.ViewProvider):
+    """FreeCAD's Job view provider, except that double-clicking the Job opens CAM Studio's
+    Setup dialog. Everything else -- tree, icons, Model/Stock item editing, FreeCAD's Job
+    editor itself (openTaskPanel) -- is inherited unchanged."""
 
-    for obj in Gui.Selection.getSelection():
-        if hasattr(obj, "Proxy") and type(obj.Proxy).__name__ == "ObjectJob":
-            return obj
-        job = PathUtils.findParentJob(obj)
-        if job is not None:
-            return job
-    doc = FreeCAD.ActiveDocument
-    jobs = [o for o in doc.Objects if hasattr(o, "Proxy") and type(o.Proxy).__name__ == "ObjectJob"] if doc else []
-    return jobs[0] if len(jobs) == 1 else None
+    def __init__(self, vobj):
+        super().__init__(vobj)
+        # Upstream starts True so cancelling a brand-new Job's first edit deletes it. Our
+        # Setup dialog never deletes the Job, and that flag would otherwise carry over to
+        # the first time the user opens FreeCAD's Job editor from it.
+        self.deleteOnReject = False
+
+    def setEdit(self, vobj=None, mode=0):
+        if mode != 0:
+            return super().setEdit(vobj, mode)
+        job = self.vobj.Object
+        if not job.Proxy.integrityCheck(job):
+            return False
+        openSetup(job)
+        return True
+
+
+def adoptJob(job):
+    """Give `job` CAM Studio's view provider if it still has FreeCAD's plain one (Jobs made
+    with stock CAM, or before this existed). Returns True if it changed."""
+    vobj = getattr(job, "ViewObject", None)
+    proxy = getattr(vobj, "Proxy", None) if vobj is not None else None
+    if type(proxy) is not PathJobGui.ViewProvider:
+        return False
+    # Switch the existing, already-attached instance to our subclass rather than assigning
+    # a new one: a freshly assigned proxy isn't attached (no vobj, no origin-axis scene
+    # nodes), and re-running upstream attach() would add a second axis display. Our class
+    # adds no state of its own, and the document saves the new class like any proxy.
+    proxy.__class__ = JobViewProvider
+    proxy.deleteOnReject = False
+    # FreeCAD caches the proxy's Python methods (setEdit, ...) when Proxy is assigned, so
+    # re-assign the same instance to make it pick up the new class's methods.
+    vobj.Proxy = proxy
+    return True
+
+
+def adoptJobs(doc=None):
+    doc = doc or FreeCAD.ActiveDocument
+    if doc is None:
+        return 0
+    return sum(adoptJob(o) for o in doc.Objects if isJob(o))
+
+
+def isJob(obj):
+    return hasattr(obj, "Proxy") and type(obj.Proxy).__name__ == "ObjectJob"
+
+
+class _AdoptOnActivate:
+    """App document observer: when a document becomes active (opened or switched to) while
+    CAM Studio is loaded, give its Jobs CAM Studio's view provider. Deferred to the event
+    loop so the GUI side of a just-opened document exists."""
+
+    def slotActivateDocument(self, doc):
+        from PySide import QtCore
+
+        name = doc.Name
+        QtCore.QTimer.singleShot(0, lambda: _adoptByName(name))
+
+
+def _adoptByName(name):
+    try:
+        doc = FreeCAD.getDocument(name)
+    except Exception:
+        return
+    adoptJobs(doc)
+
+
+_observer = None
+
+
+def installJobAdoption():
+    global _observer
+    if _observer is None:
+        _observer = _AdoptOnActivate()
+        FreeCAD.addDocumentObserver(_observer)
+    adoptJobs()
 
 
 class SetupTaskPanel:
@@ -173,7 +246,8 @@ class SetupTaskPanel:
 
     def _openJobEditor(self):
         self.accept()
-        self.job.ViewObject.Proxy.setEdit(self.job.ViewObject, 0)
+        # FreeCAD's own Job editor (inherited, not overridden in JobViewProvider).
+        self.job.ViewObject.Proxy.openTaskPanel()
 
     # -- task panel ----------------------------------------------------------------------
     def getStandardButtons(self):
@@ -196,12 +270,19 @@ class SetupTaskPanel:
                     op.touch()
         doc.commitTransaction()
         doc.recompute()
-        Gui.Control.closeDialog()
+        self._close()
         return True
 
     def reject(self):
-        Gui.Control.closeDialog()
+        self._close()
         return True
+
+    def _close(self):
+        Gui.Control.closeDialog()
+        # Opened by a double-click, the Job is in edit mode until we end it.
+        guiDoc = Gui.getDocument(self.job.Document.Name)
+        if guiDoc is not None and guiDoc.getInEdit() is not None:
+            guiDoc.resetEdit()
 
 
 def openSetup(job):

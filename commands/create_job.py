@@ -1,12 +1,11 @@
-"""CamStudio_CreateJob: Fusion-360-style "New Setup" entry point.
+"""CAM Studio's Job toolbar action (one button with a dropdown, like FreeCAD CAM's own Job
+button).
 
-Reuses FreeCAD CAM's own Job data model and creation pipeline
-(Path.Main.Gui.Job.Create) unmodified -- see docs/ARCHITECTURE.md. This
-command only supplies CAM Studio's own toolbar/menu entry point and
-selection-driven invocation; it creates the exact same Path::FeaturePython
-Job object stock CAM's own "New Job" command creates, and reuses stock
-CAM's own Job ViewProvider (Job-level editing is not part of this
-project's scope -- only operation TaskPanels are, per the roadmap).
+- CamStudio_Job: with solids selected, creates a new Job (setup) through FreeCAD CAM's own
+  creation pipeline (Path.Main.Gui.Job.Create, unmodified) and opens CAM Studio's Setup
+  dialog for it, as Fusion opens a new setup. With a Job -- or anything inside one --
+  selected, opens that Job's Setup dialog instead. Double-clicking a Job does the same.
+- CamStudio_JobGroup: the toolbar dropdown holding the Job action and the Material Library.
 """
 
 import FreeCAD
@@ -17,40 +16,74 @@ import Path.Base.Util as PathUtil
 import Path.Main.Gui.Job as PathJobGui
 
 
-class CommandCreateJob:
+def _selectedJob():
+    import PathScripts.PathUtils as PathUtils
+    from pages.setup import isJob
+
+    for obj in Gui.Selection.getSelection():
+        if isJob(obj):
+            return obj
+        job = PathUtils.findParentJob(obj)
+        if job is not None:
+            return job
+    return None
+
+
+def _selectedSolids():
+    selection = Gui.Selection.getSelection()
+    if selection and all(PathUtil.isValidBaseObject(obj) for obj in selection):
+        return selection
+    return None
+
+
+class CommandJob:
     def GetResources(self):
         return {
             "Pixmap": "CAM_Job",
-            "MenuText": QT_TRANSLATE_NOOP("CamStudio_CreateJob", "New Setup"),
+            "MenuText": QT_TRANSLATE_NOOP("CamStudio_Job", "Job"),
             "ToolTip": QT_TRANSLATE_NOOP(
-                "CamStudio_CreateJob",
-                "Create a new CAM Setup from the selected solid(s)",
+                "CamStudio_Job",
+                "Create a Job (setup) from the selected solid(s), or open the selected "
+                "Job's setup",
             ),
         }
 
     def IsActive(self):
         if FreeCAD.ActiveDocument is None:
             return False
-        selection = Gui.Selection.getSelection()
-        return bool(selection) and all(
-            PathUtil.isValidBaseObject(obj) for obj in selection
-        )
+        return _selectedJob() is not None or _selectedSolids() is not None
 
     def Activated(self):
-        selection = Gui.Selection.getSelection()
-        if not selection:
-            return
-        # openTaskPanel=False: stock CAM's own Stock-editing dialog is not part of this
-        # project's UI scope (only operation TaskPanels are, per docs/ROADMAP.md) -- the
-        # created Job keeps stock CAM's own sensible default stock, editable later the
-        # normal way (double-click the Stock item), same as in stock CAM itself.
-        job = PathJobGui.Create(selection, None, openTaskPanel=False)
-        if job is not None:
-            # Fusion opens the Setup dialog as soon as a setup is created; CAM Studio's
-            # (pages/setup.py) is where the stock material is picked.
-            from pages.setup import openSetup
+        from pages.setup import adoptJob, openSetup
 
-            openSetup(job)
+        job = _selectedJob()
+        if job is None:
+            solids = _selectedSolids()
+            if not solids:
+                return
+            # openTaskPanel=False: CAM Studio's Setup dialog opens instead of FreeCAD's.
+            job = PathJobGui.Create(solids, None, openTaskPanel=False)
+            if job is None:
+                return
+        adoptJob(job)
+        openSetup(job)
 
 
-Gui.addCommand("CamStudio_CreateJob", CommandCreateJob())
+class CommandJobGroup:
+    def GetCommands(self):
+        return ("CamStudio_Job", "CamStudio_MaterialLibrary")
+
+    def GetDefaultCommand(self):
+        return 0
+
+    def GetResources(self):
+        return {
+            "MenuText": QT_TRANSLATE_NOOP("CamStudio_JobGroup", "Job"),
+            "ToolTip": QT_TRANSLATE_NOOP("CamStudio_JobGroup", "Job: setup and stock material"),
+        }
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None
+
+
+Gui.addCommand("CamStudio_Job", CommandJob())
