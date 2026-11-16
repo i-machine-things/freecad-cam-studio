@@ -153,6 +153,24 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       from — likely a smaller gap than ramps were, but not yet verified against the 4-mode richness
       Fusion exposes (In Control/Wear/Inverse Wear all emit G41/G42, which is a post-processor-level
       concern too, not just the toolpath object)
+      **Scope (Allan, 2026-11-15): outside roughing toolpaths** -- build it with the Contour /
+      finishing work, not 2D Offset Roughing. **Required design:** emit compensation as a command
+      a post-processor can pass through when it knows how, and that is **silently dropped**
+      (not an error, no stray output) when it doesn't. Post survey (FreeCAD 1.1.4, a program with
+      `G41 D1` / `G42 D2` / `G40` posted through every bundled post):
+      - pass G41/G42 **with** the D number + G40: fanuc (Allan's), linuxcnc, mach3_mach4,
+        KineticNCBeamicon2, jtech, fangling, wedm, refactored_linuxcnc / mach3_mach4 / masso_g3 /
+        test
+      - pass G41/G42/G40 but **drop the D**: centroid, refactored_centroid, dynapath_4060, estlcam,
+        grbl, refactored_grbl, marlin, philips, rrf, smoothie, uccnc
+      - drop compensation silently: dynapath, generic, nccad, rml, svg
+      - **reject it** (would fail the post): opensbp ("gcode not handled"); heidenhain, comparams,
+        fablin, dxf, snapmaker untested (errors unrelated to compensation, or need the GUI)
+      So a plain `G41 D…` command is not enough: opensbp errors on it, and the D-dropping posts
+      lose the offset register. Options to evaluate then: a comment-style or annotated command
+      posts can opt into, or CAM Studio checking the Job's post against a known-capable list
+      before emitting. Separate from the post: many controllers (grbl, Marlin, Smoothieware
+      firmware) don't implement G41/G42 at all even where their post passes it through.
 - [ ] Pocket Tool tab: inline Speeds & Feeds editing. Fusion's full field list (confirmed via
       [Autodesk's reference](https://help.autodesk.com/cloudhelp/ENU/Fusion-CAM/files/GUID67DC60DE-EE42-4BC4-B50D-B28D938D146E.htm)):
       Spindle Speed, Surface Speed, Ramp Spindle Speed, Cutting Feedrate, Feed per Tooth,
