@@ -155,6 +155,20 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
                 ),
             )
             obj.MaxRampStepdown = 0
+        if not hasattr(obj, "RetractHeight") and hasattr(obj, "ClearanceHeight"):
+            obj.addProperty(
+                "App::PropertyDistance",
+                "RetractHeight",
+                "Depth",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Height the tool retracts to between passes (Fusion's Retract Height). "
+                    "FreeCAD otherwise retracts to Clearance Height",
+                ),
+            )
+            # Default: follow Clearance Height, i.e. exactly FreeCAD's own behavior until
+            # the user sets it. An expression, like the other heights, so it stays in step.
+            obj.setExpression("RetractHeight", "ClearanceHeight")
         if not hasattr(obj, "RampClearanceHeight"):
             obj.addProperty(
                 "App::PropertyDistance",
@@ -324,6 +338,9 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         if finishingPasses > 0 and obj.ExtraOffset.Value != 0:
             self._appendFinishingPasses(obj, finishingPasses)
 
+        if hasattr(obj, "RetractHeight"):
+            self._applyRetractHeight(obj)
+
         # Leads first, then the ramp, as Fusion allows both at once: the lead-in moves the
         # plunge out to the lead's outer end, and the helix then descends around *that*
         # point (its own fit check runs there), so the tool spirals down off the wall and
@@ -384,6 +401,46 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         params = dict(cmd.Parameters)
         params["F"] = feed
         return Path.Command(cmd.Name, params)
+
+    def _applyRetractHeight(self, obj):
+        """Fusion's Retract Height. FreeCAD's generator retracts to Clearance Height between
+        passes and travels across at that height (verified in its output). Lower those
+        between-pass retracts and travel moves to RetractHeight; the first approach and the
+        final retract (before the first and after the last cutting move) stay at Clearance.
+
+        Clamped to stay at or above Feed Height (FreeCAD Safe Height), the stock top and
+        the Top Height, so a between-pass rapid can never run through material, and at or
+        below Clearance Height."""
+        clearance = obj.ClearanceHeight.Value
+        wanted = obj.RetractHeight.Value
+        floor = max(obj.SafeHeight.Value, obj.StartDepth.Value)
+        stockTop = getattr(obj, "OpStockZMax", None)
+        if stockTop is not None:
+            floor = max(floor, stockTop.Value)
+        retract = min(clearance, max(wanted, floor))
+        if retract < wanted - 1e-6 or retract > wanted + 1e-6:
+            Path.Log.warning(
+                "%s: Retract Height %.3f mm is outside the safe range (Feed Height / stock "
+                "top %.3f mm up to Clearance Height %.3f mm); using %.3f mm.\n"
+                % (obj.Label, wanted, floor, clearance, retract)
+            )
+        if abs(retract - clearance) < 1e-6:
+            return
+        cmds = list(obj.Path.Commands)
+        cutting = [i for i, c in enumerate(cmds) if c.Name in ("G1", "G01", "G2", "G02", "G3", "G03")]
+        if not cutting:
+            return
+        changed = False
+        for i in range(cutting[0] + 1, cutting[-1]):
+            c = cmds[i]
+            z = c.Parameters.get("Z")
+            if c.Name in ("G0", "G00") and z is not None and abs(z - clearance) < 1e-6:
+                cmds[i] = Path.Command(c.Name, dict(c.Parameters, Z=retract))
+                changed = True
+        if changed:
+            obj.Path = Path.Path(cmds)
+            obj.CycleTime = PathOp.getCycleTimeEstimate(obj)
+            self.job.Proxy.getCycleTime()
 
     @staticmethod
     def _withFeed(params, feed):

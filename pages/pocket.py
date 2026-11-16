@@ -22,6 +22,7 @@ import FreeCADGui as Gui
 from PySide import QtWidgets
 from PySide.QtCore import Qt
 
+import Path.Base.Gui.Util as PathGuiUtil
 import Path.Op.Gui.Base as PathOpGui
 import Path.Op.Gui.FeatureExtension as PathFeatureExtensionsGui
 import Path.Op.PocketShape as PathPocketShape
@@ -245,6 +246,13 @@ class HeightsBar(PathOpGui.TaskPanelPage):
 
     def getForm(self):
         h, d = self.heightsPage.form, self.depthsPage.form
+        # Retract Height is CAM Studio's own property (ops/pocket.py), bound with the same
+        # expression-aware helper FreeCAD's height fields use.
+        self.retractField = _quantity_spinbox()
+        self.retract = None
+        if hasattr(self.obj, "RetractHeight"):
+            self.retract = PathGuiUtil.QuantitySpinBox(self.retractField, self.obj, "RetractHeight")
+
         form = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(form)
         section = CollapsibleSection(translate("CamStudio_Pocket", "Heights"))
@@ -256,6 +264,10 @@ class HeightsBar(PathOpGui.TaskPanelPage):
                        "The tool also retracts to it between passes (FreeCAD has no "
                        "separate retract height)"),
              h.clearanceHeight, None),
+            (translate("CamStudio_Pocket", "Retract Height"),
+             translate("CamStudio_Pocket", "Height the tool retracts to between passes. "
+                       "Kept between Feed Height and Clearance Height"),
+             self.retractField if self.retract is not None else None, None),
             (translate("CamStudio_Pocket", "Feed Height"),
              translate("CamStudio_Pocket", "The tool rapids down to this height, then "
                        "feeds from here into the cut (FreeCAD: Safe Height)"),
@@ -267,7 +279,9 @@ class HeightsBar(PathOpGui.TaskPanelPage):
              translate("CamStudio_Pocket", "Bottom of the cut (FreeCAD: Final Depth)"),
              d.finalDepth, d.finalDepthSet),
         ):
-            if field.isHidden():
+            # FreeCAD's Depths page hides fields the op doesn't use; skip those. (Only check
+            # FreeCAD's widgets: ours has no parent yet, which Qt also reports as hidden.)
+            if field is None or (field is not self.retractField and field.isHidden()):
                 continue
             field.setToolTip(tip)
             if button is not None and not button.isHidden():
@@ -288,13 +302,20 @@ class HeightsBar(PathOpGui.TaskPanelPage):
     def getFields(self, obj):
         for child in self.children:
             child.getFields(obj)
+        if self.retract is not None:
+            self.retract.updateProperty()
 
     def setFields(self, obj):
         for child in self.children:
             child.setFields(obj)
+        if self.retract is not None:
+            self.retract.updateWidget()
 
     def getSignalsForUpdate(self, obj):
-        return [s for child in self.children for s in child.getSignalsForUpdate(obj)]
+        signals = [s for child in self.children for s in child.getSignalsForUpdate(obj)]
+        if self.retract is not None:
+            signals.append(self.retractField.editingFinished)
+        return signals
 
     def registerSignalHandlers(self, obj):
         for child in self.children:
@@ -303,6 +324,8 @@ class HeightsBar(PathOpGui.TaskPanelPage):
     def pageUpdateData(self, obj, prop):
         for child in self.children:
             child.pageUpdateData(obj, prop)
+        if prop in ("RetractHeight", "ClearanceHeight") and self.retract is not None:
+            self.retract.updateWidget()
 
     def updateSelection(self, obj, sel):
         for child in self.children:
