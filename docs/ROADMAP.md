@@ -369,7 +369,7 @@ Allan's request: a material library, picked per setup, driving default feeds and
   **double-clicking the Job** (CAM Studio's Job view provider, a thin subclass of FreeCAD's;
   Jobs from stock CAM are switched over when CAM Studio is active) and from the toolbar's
   single **Job** button (with solids selected it creates a Job, with a Job selected it opens
-  that Job's setup; its dropdown also holds Material Library). No separate New/Edit Setup. Setup bar (name, models) and Stock bar (Stock Material,
+  that Job's setup). Material Library is its own toolbar button. No separate New/Edit Setup. Setup bar (name, models) and Stock bar (Stock Material,
   summary, Edit Material Library, optional reset of existing ops). Stored as a
   `StockMaterial` string on the Job.
 - **Not built yet in the Setup dialog**: WCS/orientation, stock size and shape, post-processor

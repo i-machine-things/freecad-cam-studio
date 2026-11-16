@@ -28,8 +28,3 @@ class CommandMaterialLibrary:
 
 
 Gui.addCommand("CamStudio_MaterialLibrary", CommandMaterialLibrary())
-
-# The toolbar's Job dropdown needs both of its commands registered first.
-from commands.create_job import CommandJobGroup  # noqa: E402
-
-Gui.addCommand("CamStudio_JobGroup", CommandJobGroup())

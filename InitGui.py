@@ -11,9 +11,10 @@ class CamStudioWorkbench(Gui.Workbench):
     ToolTip = "Fusion-360-CAM-style workflow for FreeCAD's CAM module (clean-room addon)"
     Icon = "Resources/icons/workbench.svg"
 
-    # Toolbar: one Job button with a dropdown (Job, Material Library), then operations.
     toolbar_list = [
-        "CamStudio_JobGroup",
+        "CamStudio_Job",
+        "CamStudio_MaterialLibrary",
+        "Separator",
         "CamStudio_Pocket",
     ]
     menu_list = [

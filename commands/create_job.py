@@ -1,11 +1,9 @@
-"""CAM Studio's Job toolbar action (one button with a dropdown, like FreeCAD CAM's own Job
-button).
+"""CAM Studio's Job toolbar action.
 
 - CamStudio_Job: with solids selected, creates a new Job (setup) through FreeCAD CAM's own
   creation pipeline (Path.Main.Gui.Job.Create, unmodified) and opens CAM Studio's Setup
   dialog for it, as Fusion opens a new setup. With a Job -- or anything inside one --
   selected, opens that Job's Setup dialog instead. Double-clicking a Job does the same.
-- CamStudio_JobGroup: the toolbar dropdown holding the Job action and the Material Library.
 """
 
 import FreeCAD
@@ -67,23 +65,6 @@ class CommandJob:
                 return
         adoptJob(job)
         openSetup(job)
-
-
-class CommandJobGroup:
-    def GetCommands(self):
-        return ("CamStudio_Job", "CamStudio_MaterialLibrary")
-
-    def GetDefaultCommand(self):
-        return 0
-
-    def GetResources(self):
-        return {
-            "MenuText": QT_TRANSLATE_NOOP("CamStudio_JobGroup", "Job"),
-            "ToolTip": QT_TRANSLATE_NOOP("CamStudio_JobGroup", "Job: setup and stock material"),
-        }
-
-    def IsActive(self):
-        return FreeCAD.ActiveDocument is not None
 
 
 Gui.addCommand("CamStudio_Job", CommandJob())
