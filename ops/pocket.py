@@ -734,9 +734,13 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
     def _fitLead(self, px, py, dx, dy, spec, clearance, sides, z, entering):
         """First lead geometry (trying each of `sides`) whose swept cutter area fits
         inside the pocket, or None."""
+        # _leadGeometry samples the arc every <= 5 degrees and the check sweeps the straight
+        # chords between samples, which lie inside the true arc by up to R*(1-cos(2.5 deg)).
+        # The emitted G2/G3 follows the true circle, so widen the check by that much.
+        chordError = spec[0] * (1.0 - math.cos(math.radians(2.5)))
         for side in sides:
             geometry = self._leadGeometry(px, py, dx, dy, spec, side, entering)
-            if self._sweptAreaFits(geometry["points"], clearance, z):
+            if self._sweptAreaFits(geometry["points"], clearance + chordError, z):
                 return geometry
             if geometry["center"] is None:
                 break  # no arc: both sides are the same straight leg
