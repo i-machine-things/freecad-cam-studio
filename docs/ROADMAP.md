@@ -309,14 +309,15 @@ Selected contour(s)) and an **Offset**.
 |---|---|---|
 | High Feedrate Mode (e.g. Preserve rapid moves) | Missing | |
 | Allow Rapid Retract, Safe Distance | Missing | |
-| Keep Tool Down | Partial | FreeCAD `KeepToolDown` exists but isn't on our page |
-| Maximum Stay-Down Distance, Lift Height | Missing | |
+| Keep Tool Down | Have | FreeCAD `KeepToolDown`, on the Linking bar. Stays down for links up to one tool diameter (upstream's fixed limit) |
+| Maximum Stay-Down Distance | Missing | Upstream's link distance is the right hook, but its links are straight and unchecked. Fusion's 2 in default would let one cut through an island or plough through uncut stock. Needs each link checked against walls/islands *and* the area cleared so far before the limit can be raised |
+| Lift Height | Missing | |
 | Lead-In (Entry), Horizontal Lead-In Radius, Lead-In Sweep Angle, Linear Lead-In Distance, Perpendicular | Have | |
 | Vertical Lead-In Radius | Missing | |
 | Lead-Out (Exit), Same as Lead-In | Have | Fusion lists only these two with Same as Lead-In ticked |
 | Ramp Type | Partial | Plunge + Helix of 7 |
 | Ramping Angle, Maximum Ramp Stepdown, Helical Ramp Diameter, Minimum Ramp Diameter | Have | |
-| Ramp Clearance Height | Missing | |
+| Ramp Clearance Height | Have | `RampClearanceHeight`, default 0.100 in as in the capture. The tool rapids down to this far above the stock top (or Start Depth, if higher), then ramps from there instead of spiralling down from Safe Height at plunge feed |
 | Ramp Radial Clearance | Missing | Not in any earlier list |
 | Positions: Predrill Positions, Preferred Lead-In Positions, Exit Positions | Missing | Point selections |
 

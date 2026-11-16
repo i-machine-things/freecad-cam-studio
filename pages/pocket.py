@@ -357,7 +357,7 @@ class PassesPage(_BarPage):
 
 
 class LinkingPage(_BarPage):
-    """Linking bar: Leads & Transitions, then Ramp -- Fusion's Linking tab order."""
+    """Linking bar: Linking, Leads & Transitions, then Ramp -- Fusion's Linking tab order."""
 
     def getTitle(self, obj):
         return translate("CamStudio_Pocket", "Linking")
@@ -365,6 +365,24 @@ class LinkingPage(_BarPage):
     def getForm(self):
         form = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(form)
+
+        # Fusion's Linking tab opens with its own "Linking" section (how the tool moves
+        # between passes). Only Keep Tool Down is here so far: it's FreeCAD's KeepToolDown,
+        # which stays down for links up to one tool diameter. Fusion's Maximum Stay-Down
+        # Distance needs those links checked against uncut material first -- see ROADMAP.
+        link_group = CollapsibleSection(translate("CamStudio_Pocket", "Linking"))
+        link_layout = QtWidgets.QFormLayout()
+        form.keepToolDown = QtWidgets.QCheckBox(translate("CamStudio_Pocket", "Keep Tool Down"))
+        form.keepToolDown.setToolTip(
+            translate(
+                "CamStudio_Pocket",
+                "Stay at depth instead of retracting when the next pass starts within one "
+                "tool diameter.",
+            )
+        )
+        link_layout.addRow(form.keepToolDown)
+        link_group.setContentLayout(link_layout)
+        layout.addWidget(link_group)
 
         leads_group = CollapsibleSection(translate("CamStudio_Pocket", "Leads && Transitions"))  # && = literal & in a QToolButton
         leads_layout = QtWidgets.QFormLayout()
@@ -434,6 +452,7 @@ class LinkingPage(_BarPage):
         form.helicalRampDiameter = _quantity_spinbox()
         form.minimumRampDiameter = _quantity_spinbox()
         form.maxRampStepdown = _quantity_spinbox()
+        form.rampClearanceHeight = _quantity_spinbox()
         ramp_layout.addRow(translate("CamStudio_Pocket", "Ramp Type"), form.rampType)
         ramp_layout.addRow(translate("CamStudio_Pocket", "Ramp Angle"), form.rampAngle)
         ramp_layout.addRow(
@@ -446,6 +465,9 @@ class LinkingPage(_BarPage):
         ramp_layout.addRow(
             translate("CamStudio_Pocket", "Maximum Ramp Stepdown (0 = unconstrained)"),
             form.maxRampStepdown,
+        )
+        ramp_layout.addRow(
+            translate("CamStudio_Pocket", "Ramp Clearance Height"), form.rampClearanceHeight
         )
         ramp_group.setContentLayout(ramp_layout)
         layout.addWidget(ramp_group)
@@ -461,6 +483,7 @@ class LinkingPage(_BarPage):
         self.form.helicalRampDiameter.setEnabled(isHelix)
         self.form.minimumRampDiameter.setEnabled(isHelix)
         self.form.maxRampStepdown.setEnabled(isHelix)
+        self.form.rampClearanceHeight.setEnabled(isHelix)
         self.updateLeadInOutFieldsEnabled(obj)
 
     def updateLeadInOutFieldsEnabled(self, obj):
@@ -491,6 +514,9 @@ class LinkingPage(_BarPage):
         _qty_commit(obj, "HelicalRampDiameter", self.form.helicalRampDiameter)
         _qty_commit(obj, "MinimumRampDiameter", self.form.minimumRampDiameter)
         _qty_commit(obj, "MaxRampStepdown", self.form.maxRampStepdown)
+        _qty_commit(obj, "RampClearanceHeight", self.form.rampClearanceHeight)
+        if obj.KeepToolDown != self.form.keepToolDown.isChecked():
+            obj.KeepToolDown = self.form.keepToolDown.isChecked()
         for prop, widget in self._leadCheckboxes():
             if getattr(obj, prop) != widget.isChecked():
                 setattr(obj, prop, widget.isChecked())
@@ -504,6 +530,8 @@ class LinkingPage(_BarPage):
         _qty_set(self.form.helicalRampDiameter, obj.HelicalRampDiameter.Value)
         _qty_set(self.form.minimumRampDiameter, obj.MinimumRampDiameter.Value)
         _qty_set(self.form.maxRampStepdown, obj.MaxRampStepdown.Value)
+        _qty_set(self.form.rampClearanceHeight, obj.RampClearanceHeight.Value)
+        self.form.keepToolDown.setChecked(obj.KeepToolDown)
         for prop, widget in self._leadCheckboxes():
             widget.setChecked(getattr(obj, prop))
         for prop, widget in self._leadQuantities():
@@ -517,6 +545,8 @@ class LinkingPage(_BarPage):
             self.form.helicalRampDiameter.editingFinished,
             self.form.minimumRampDiameter.editingFinished,
             self.form.maxRampStepdown.editingFinished,
+            self.form.rampClearanceHeight.editingFinished,
+            self.form.keepToolDown.clicked,
         ] + [
             widget.clicked for _prop, widget in self._leadCheckboxes()
         ] + [

@@ -155,6 +155,19 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
                 ),
             )
             obj.MaxRampStepdown = 0
+        if not hasattr(obj, "RampClearanceHeight"):
+            obj.addProperty(
+                "App::PropertyDistance",
+                "RampClearanceHeight",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Height above the top of the material where the ramp starts. The tool "
+                    "rapids down to it, then ramps from there",
+                ),
+            )
+            # Fusion's default as seen in Allan's capture: 0.100 in.
+            obj.RampClearanceHeight = 2.54
         if not hasattr(obj, "FinishingPasses"):
             obj.addProperty(
                 "App::PropertyInteger",
@@ -391,6 +404,22 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             return
         plungeIdx, start, end = found
 
+        # Ramp Clearance Height: rapid straight down to just above the material and start
+        # the ramp there, instead of spiralling all the way down from the safe height at
+        # plunge feed. The first plunge always enters the top of the material, so "above
+        # the material" is above the stock top (or the op's Start Depth if that's higher).
+        rapidTo = None
+        clearance = getattr(obj, "RampClearanceHeight", None)
+        if clearance is not None:
+            top = obj.StartDepth.Value
+            stockTop = getattr(obj, "OpStockZMax", None)
+            if stockTop is not None:
+                top = max(top, stockTop.Value)
+            rampTop = top + max(0.0, clearance.Value)
+            if end.z + 1e-6 < rampTop < start.z - 1e-6:
+                rapidTo = rampTop
+                start = FreeCAD.Vector(start.x, start.y, rampTop)
+
         placement = self._fitHelixRamp(obj, end)
         if placement is None:
             Path.Log.warning(
@@ -406,6 +435,8 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         if not rampCmds:
             return
 
+        if rapidTo is not None:
+            rampCmds = [Path.Command("G0", {"Z": rapidTo})] + rampCmds
         newCmds = list(cmds[:plungeIdx]) + rampCmds + list(cmds[plungeIdx + 1 :])
         obj.Path = Path.Path(newCmds)
         # The cycle-time estimate was already computed by super().execute(obj) against the
