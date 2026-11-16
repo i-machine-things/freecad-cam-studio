@@ -376,7 +376,8 @@ Selected contour(s)) and an **Offset**.
 | Lead-In (Entry), Horizontal Lead-In Radius, Lead-In Sweep Angle, Linear Lead-In Distance, Perpendicular | Have | |
 | Vertical Lead-In Radius | Missing | |
 | Lead-Out (Exit), Same as Lead-In | Have | Fusion lists only these two with Same as Lead-In ticked |
-| Ramp Type | Partial | Plunge + Helix of 7 |
+| Ramp Type | Partial | Plunge, **Plunge Outside Stock**, Helix of 7 |
+| - Plunge Outside Stock | Have | At every depth level, each separate area (boss top / pocket region) is entered by plunging just outside its outline -- **Plunge Distance**, tool center from the edge, default 1.25 x tool diameter (Allan) -- then feeding in sideways. Plunge and feed are checked against the finished part. Areas enclosed by the part (recessed pockets) keep a normal plunge, with a warning. Assumes the space beside the area is clear of stock (CAM Studio can't see leftover stock, only the part) |
 | Ramping Angle, Maximum Ramp Stepdown, Helical Ramp Diameter, Minimum Ramp Diameter | Have | |
 | Ramp Clearance Height | Have | `RampClearanceHeight`, default 0.100 in as in the capture. The tool rapids down to this far above the stock top (or Start Depth, if higher), then ramps from there instead of spiralling down from Safe Height at plunge feed |
 | Ramp Radial Clearance | Missing | Not in any earlier list |

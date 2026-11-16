@@ -990,12 +990,21 @@ class LinkingPage(_BarPage):
         ramp_layout.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
         form.rampType = QtWidgets.QComboBox()
         form.rampType.addItem(translate("CamStudio_Pocket", "Plunge"), "Plunge")
+        form.rampType.addItem(translate("CamStudio_Pocket", "Plunge Outside Stock"), "Plunge Outside Stock")
         form.rampType.addItem(translate("CamStudio_Pocket", "Helix"), "Helix")
         form.rampAngle = _quantity_spinbox(unit="deg")
         form.helicalRampDiameter = _quantity_spinbox()
         form.minimumRampDiameter = _quantity_spinbox()
         form.maxRampStepdown = _quantity_spinbox()
         form.rampClearanceHeight = _quantity_spinbox()
+        form.outsidePlungeDistance = _quantity_spinbox()
+        form.outsidePlungeDistance.setToolTip(
+            translate(
+                "CamStudio_Pocket",
+                "Plunge Outside Stock: how far outside each area's edge the tool center plunges. "
+                "0 = 1.25 x tool diameter.",
+            )
+        )
         ramp_layout.addRow(translate("CamStudio_Pocket", "Ramp Type"), form.rampType)
         ramp_layout.addRow(translate("CamStudio_Pocket", "Ramp Angle"), form.rampAngle)
         ramp_layout.addRow(
@@ -1012,6 +1021,10 @@ class LinkingPage(_BarPage):
         ramp_layout.addRow(
             translate("CamStudio_Pocket", "Ramp Clearance Height"), form.rampClearanceHeight
         )
+        ramp_layout.addRow(
+            translate("CamStudio_Pocket", "Plunge Distance (0 = 1.25 x tool \u00d8)"),
+            form.outsidePlungeDistance,
+        )
         ramp_group.setContentLayout(ramp_layout)
         layout.addWidget(ramp_group)
         layout.addStretch(1)
@@ -1027,6 +1040,7 @@ class LinkingPage(_BarPage):
         self.form.minimumRampDiameter.setEnabled(isHelix)
         self.form.maxRampStepdown.setEnabled(isHelix)
         self.form.rampClearanceHeight.setEnabled(isHelix)
+        self.form.outsidePlungeDistance.setEnabled(obj.RampType == "Plunge Outside Stock")
         self.updateLeadInOutFieldsEnabled(obj)
 
     def updateLeadInOutFieldsEnabled(self, obj):
@@ -1058,6 +1072,7 @@ class LinkingPage(_BarPage):
         _qty_commit(obj, "MinimumRampDiameter", self.form.minimumRampDiameter)
         _qty_commit(obj, "MaxRampStepdown", self.form.maxRampStepdown)
         _qty_commit(obj, "RampClearanceHeight", self.form.rampClearanceHeight)
+        _qty_commit(obj, "OutsidePlungeDistance", self.form.outsidePlungeDistance)
         if obj.KeepToolDown != self.form.keepToolDown.isChecked():
             obj.KeepToolDown = self.form.keepToolDown.isChecked()
         for prop, widget in self._leadCheckboxes():
@@ -1074,6 +1089,7 @@ class LinkingPage(_BarPage):
         _qty_set(self.form.minimumRampDiameter, obj.MinimumRampDiameter.Value)
         _qty_set(self.form.maxRampStepdown, obj.MaxRampStepdown.Value)
         _qty_set(self.form.rampClearanceHeight, obj.RampClearanceHeight.Value)
+        _qty_set(self.form.outsidePlungeDistance, obj.OutsidePlungeDistance.Value)
         self.form.keepToolDown.setChecked(obj.KeepToolDown)
         for prop, widget in self._leadCheckboxes():
             widget.setChecked(getattr(obj, prop))
@@ -1089,6 +1105,7 @@ class LinkingPage(_BarPage):
             self.form.minimumRampDiameter.editingFinished,
             self.form.maxRampStepdown.editingFinished,
             self.form.rampClearanceHeight.editingFinished,
+            self.form.outsidePlungeDistance.editingFinished,
             self.form.keepToolDown.clicked,
         ] + [
             widget.clicked for _prop, widget in self._leadCheckboxes()

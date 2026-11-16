@@ -58,6 +58,7 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
     # (the thing that matters physically); MAX_RAMP_SEGMENTS is a secondary sample-count safety
     # net that should rarely bind once revolutions are already bounded. 50 revolutions is
     # already far more than any real single-entry ramp needs.
+    RAMP_TYPES = ["Plunge", "Plunge Outside Stock", "Helix"]
     MAX_RAMP_REVOLUTIONS = 50
     MAX_RAMP_SEGMENTS = 2000
 
@@ -110,8 +111,13 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
                     "App::Property", "How the tool enters the material for the first plunge"
                 ),
             )
-            obj.RampType = ["Plunge", "Helix"]
+            obj.RampType = self.RAMP_TYPES
             obj.RampType = "Plunge"
+        elif list(obj.getEnumerationsOfProperty("RampType")) != list(self.RAMP_TYPES):
+            # Older documents: add ramp types built since, keeping the current choice.
+            current = obj.RampType
+            obj.RampType = self.RAMP_TYPES
+            obj.RampType = current if current in self.RAMP_TYPES else "Plunge"
         if not hasattr(obj, "RampAngle"):
             obj.addProperty(
                 "App::PropertyAngle",
@@ -229,6 +235,18 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             # Default: follow Clearance Height, i.e. exactly FreeCAD's own behavior until
             # the user sets it. An expression, like the other heights, so it stays in step.
             obj.setExpression("RetractHeight", "ClearanceHeight")
+        if not hasattr(obj, "OutsidePlungeDistance"):
+            obj.addProperty(
+                "App::PropertyDistance",
+                "OutsidePlungeDistance",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Plunge Outside Stock: distance from the area's edge to the tool center at "
+                    "the plunge. 0 = 1.25 x tool diameter",
+                ),
+            )
+            obj.OutsidePlungeDistance = 0
         if not hasattr(obj, "RampClearanceHeight"):
             obj.addProperty(
                 "App::PropertyDistance",
@@ -545,8 +563,11 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         # the lead carries it into the cut at full depth.
         if getattr(obj, "UseLeadIn", False) or getattr(obj, "UseLeadOut", False):
             self._applyLeadInOut(obj)
-        if getattr(obj, "RampType", "Plunge") == "Helix":
+        rampType = getattr(obj, "RampType", "Plunge")
+        if rampType == "Helix":
             self._applyHelixRampEntry(obj)
+        elif rampType == "Plunge Outside Stock":
+            self._applyOutsideStockEntries(obj)
         if hasattr(obj, "SpindleSpeed"):
             self._applySpindleSpeed(obj)
         return result
@@ -1116,6 +1137,187 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             return None
         approachX, approachY = lead["far"]
 
+        newCmds = self._movePlunge(cmds, plungeIdx, start, approachX, approachY)
+        if newCmds is None:
+            return None
+        # Then travel the lead inward: straight leg to the junction, arc into the true start.
+        moves = []
+        jx, jy = lead["junction"]
+        feed = getattr(self, "leadInFeed", self.horizFeed)
+        if lead["hasLinear"]:
+            moves.append(self._leadLine(jx, jy, end.z, feed))
+        if lead["center"] is not None:
+            moves.append(self._leadArc((jx, jy), (end.x, end.y), end.z, lead, feed))
+        newCmds[plungeIdx + 1 : plungeIdx + 1] = moves
+        return newCmds
+
+    # -- Plunge Outside Stock -------------------------------------------------------------
+    OUTSIDE_GAP = 0.5  # mm: minimum gap between the cutter and an area's edge
+    OUTSIDE_DEFAULT_DIAMETERS = 1.25  # default plunge distance, x tool diameter (Allan)
+
+    def _applyOutsideStockEntries(self, obj):
+        """Fusion's "Plunge Outside Stock" ramp type: at every depth level, enter each separate
+        area (each island / boss top, each pocket region) by plunging just outside it, in
+        the open, then feeding sideways into the area's start -- instead of plunging into
+        the material.
+
+        Per level and per area, the first plunge into it is an entry. Its outside point is
+        searched for around the area's outline, offset outward by OutsidePlungeDistance (to
+        the tool center; default 1.25 x tool diameter, never closer than the cutter's
+        clearance + OUTSIDE_GAP), nearest to the entry first;
+        the cutter's whole plunge there and its feed into the area must both miss the
+        finished part (the Job's models). An area enclosed by the part -- a recessed pocket
+        -- has no such point and keeps its normal plunge, with a warning.
+
+        Assumption, stated plainly: the space beside the area is already clear of stock (an
+        earlier operation, or it's above the stock). CAM Studio checks against the finished
+        part, not against leftover stock it can't see. Plunges that re-enter already-cleared
+        air within a level are left alone."""
+        cmds = list(obj.Path.Commands)
+        part = self._partShape()
+        if not cmds or part is None:
+            return
+        clearance = self.tool.Diameter.Value / 2.0 + obj.ExtraOffset.Value
+        distance = getattr(obj, "OutsidePlungeDistance", None)
+        distance = distance.Value if distance is not None else 0.0
+        if distance <= 0:
+            distance = self.OUTSIDE_DEFAULT_DIAMETERS * self.tool.Diameter.Value
+        # Never so close that the plunging cutter would touch the area's edge.
+        distance = max(distance, clearance + self.OUTSIDE_GAP)
+        feed = getattr(self, "leadInFeed", None) or self.horizFeed
+        entries = self._entryPlunges(cmds)
+        regionCache, firstPer = {}, {}
+        for plungeIdx, start, end in entries:
+            key = round(end.z, 6)
+            if key not in regionCache:
+                regionCache[key] = self._areasAt(end.z)
+            region = next(
+                (i for i, face in enumerate(regionCache[key])
+                 if face.isInside(FreeCAD.Vector(end.x, end.y, face.BoundBox.ZMin), 1e-6, True)),
+                None,
+            )
+            if region is not None and (key, region) not in firstPer:
+                firstPer[(key, region)] = plungeIdx
+        regionOf = {idx: kr for kr, idx in firstPer.items()}
+        missing, changed = 0, False
+        for plungeIdx, start, end in reversed(entries):
+            if plungeIdx not in regionOf:
+                continue
+            key, region = regionOf[plungeIdx]
+            point = self._outsidePoint(regionCache[key][region], part, clearance, distance, end)
+            newCmds = None
+            if point is not None:
+                newCmds = self._movePlunge(cmds, plungeIdx, start, point[0], point[1])
+            if newCmds is None:
+                missing += 1
+                continue
+            newCmds.insert(
+                plungeIdx + 1,
+                Path.Command("G1", self._withFeed({"X": end.x, "Y": end.y, "Z": end.z}, feed)),
+            )
+            cmds = newCmds
+            changed = True
+        if missing:
+            Path.Log.warning(
+                "%s: Plunge Outside Stock: %d entr%s kept a normal plunge -- no clear spot just "
+                "outside that area (e.g. a pocket enclosed by the part).\n"
+                % (obj.Label, missing, "y" if missing == 1 else "ies")
+            )
+        if changed:
+            obj.Path = Path.Path(cmds)
+            obj.CycleTime = PathOp.getCycleTimeEstimate(obj)
+            self.job.Proxy.getCycleTime()
+
+    def _partShape(self):
+        shapes = [m.Shape for m in getattr(self, "model", None) or [] if hasattr(m, "Shape") and not m.Shape.isNull()]
+        if not shapes:
+            return None
+        return shapes[0] if len(shapes) == 1 else Part.makeCompound(shapes)
+
+    def _entryPlunges(self, cmds):
+        """(index, start, end) for every straight vertical feed plunge, in path order."""
+        out = []
+        x = y = z = None
+        for i, cmd in enumerate(cmds):
+            p = cmd.Parameters
+            nx, ny, nz = p.get("X", x), p.get("Y", y), p.get("Z", z)
+            if (
+                cmd.Name in ("G1", "G01")
+                and None not in (x, y, z, nx, ny, nz)
+                and abs(nx - x) < 1e-6
+                and abs(ny - y) < 1e-6
+                and nz < z - 1e-6
+            ):
+                out.append((i, FreeCAD.Vector(x, y, z), FreeCAD.Vector(nx, ny, nz)))
+            x, y, z = nx, ny, nz
+        return out
+
+    def _areasAt(self, z):
+        """The separate areas to clear at height z: faces of the removal solids' cross
+        section (islands are holes in them)."""
+        faces = []
+        for tup in getattr(self, "removalshapes", None) or []:
+            solid, isHole = tup[0], tup[1]
+            if isHole or solid.isNull():
+                continue
+            bb = solid.BoundBox
+            zz = max(bb.ZMin + 1e-4, min(z, bb.ZMax - 1e-4))
+            wires = solid.slice(FreeCAD.Vector(0, 0, 1), zz)
+            if not wires:
+                continue
+            try:
+                section = Part.makeFace(wires, "Part::FaceMakerBullseye")
+            except Exception:
+                continue
+            faces += section.Faces
+        return faces
+
+    def _outsidePoint(self, area, part, clearance, distance, entry):
+        """A point `distance` outside `area`'s outline (tool center) where
+        the cutter can plunge to entry.z and then feed straight to `entry` without touching
+        the finished part; nearest to the entry first. None if there is none."""
+        z = entry.z
+        flat = area.copy()
+        flat.translate(FreeCAD.Vector(0, 0, z - flat.BoundBox.ZMin))
+        # The offset's direction follows how FreeCAD happened to orient the cross section
+        # (a r8 round boss came out r1.75 instead of r14.25), so check which way it went
+        # and take the one that grew.
+        try:
+            ring = flat.makeOffset2D(distance, join=0, openResult=False)
+            if ring.Area < flat.Area:
+                ring = flat.makeOffset2D(-distance, join=0, openResult=False)
+        except Exception:
+            return None
+        if ring.Area <= flat.Area:
+            return None
+        candidates = []
+        for edge in ring.OuterWire.Edges if hasattr(ring, "OuterWire") else ring.Edges:
+            n = max(2, int(math.ceil(edge.Length / 1.0)))
+            for i in range(n):
+                v = edge.valueAt(edge.FirstParameter + (edge.LastParameter - edge.FirstParameter) * i / n)
+                candidates.append((v.x, v.y))
+        candidates.sort(key=lambda p: (p[0] - entry.x) ** 2 + (p[1] - entry.y) ** 2)
+        top = max(part.BoundBox.ZMax, z) + 1.0
+        for px, py in candidates:
+            # The whole plunge, from above the part down to z, must miss the part...
+            cutter = Part.makeCylinder(clearance, top - z, FreeCAD.Vector(px, py, z))
+            if part.common(cutter).Volume > 1e-6:
+                continue
+            # ...and so must the feed sideways into the area (a thin slab at z).
+            if self._sweepHitsPart([(px, py), (entry.x, entry.y)], clearance, z, part):
+                continue
+            return px, py
+        return None
+
+    def _sweepHitsPart(self, points, radius, z, part):
+        height = 0.05
+        slabs = self._sweptSlabParts(points, max(radius - self.FIT_TOLERANCE, self.FIT_TOLERANCE), z + 1e-3, height)
+        return any(part.common(s).Volume > 1e-6 for s in slabs)
+
+    def _movePlunge(self, cmds, plungeIdx, start, approachX, approachY):
+        """Return `cmds` with the plunge at `plungeIdx` (descending from `start`) moved to
+        (approachX, approachY) -- the positioning rapids above it retargeted so every
+        descent stays vertical -- or None when that can't be done safely."""
         # The tool has to be over the approach point *before* it starts descending, so every
         # rapid that positions it over the old plunge point has to move with it -- not just
         # the command right before the plunge. Stock output is e.g. `G0 X Y` (at clearance)
@@ -1168,15 +1370,6 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         newCmds[plungeIdx] = Path.Command(
             plungeCmd.Name, dict(plungeCmd.Parameters, X=approachX, Y=approachY)
         )
-        # Then travel the lead inward: straight leg to the junction, arc into the true start.
-        moves = []
-        jx, jy = lead["junction"]
-        feed = getattr(self, "leadInFeed", self.horizFeed)
-        if lead["hasLinear"]:
-            moves.append(self._leadLine(jx, jy, end.z, feed))
-        if lead["center"] is not None:
-            moves.append(self._leadArc((jx, jy), (end.x, end.y), end.z, lead, feed))
-        newCmds[plungeIdx + 1 : plungeIdx + 1] = moves
         return newCmds
 
     def _insertLeadOut(self, cmds, spec, clearance, sides):
