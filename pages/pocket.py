@@ -629,7 +629,7 @@ class PassesPage(_BarPage):
         form.stepOverPercent.setRange(1, 100)
         form.stepOverPercent.setSuffix(" %")
         form.stepOverPercent.setToolTip(
-            translate("CamStudio_Pocket", "Stepover as a percent of the tool diameter (linked to Maximum Stepover)")
+            translate("CamStudio_Pocket", "The same stepover as a percent of the tool diameter. Edit either box.")
         )
         form.radialStockToLeave = _quantity_spinbox()
         form.axialStockToLeave = _quantity_spinbox()
@@ -656,8 +656,14 @@ class PassesPage(_BarPage):
         form.finishFeedrate.setDecimals(feedDecimals)
         form.finishFeedrate.setSuffix(" " + feedUnit)
         passes_layout.addRow(translate("CamStudio_Pocket", "Sideways Compensation"), form.cutMode)
-        passes_layout.addRow(translate("CamStudio_Pocket", "Maximum Stepover"), form.maxStepover)
-        passes_layout.addRow(translate("CamStudio_Pocket", "Stepover (% of tool)"), form.stepOverPercent)
+        # One setting, shown two ways on one row: distance = percent of the tool diameter.
+        # Both boxes are editable and kept in step (see _commitStepover).
+        stepoverRow = QtWidgets.QHBoxLayout()
+        stepoverRow.addWidget(form.maxStepover, 3)
+        stepoverRow.addWidget(QtWidgets.QLabel("="))
+        stepoverRow.addWidget(form.stepOverPercent, 2)
+        stepoverRow.addWidget(QtWidgets.QLabel(translate("CamStudio_Pocket", "of tool \u00d8")))
+        passes_layout.addRow(translate("CamStudio_Pocket", "Maximum Stepover"), stepoverRow)
         passes_layout.addRow(
             translate("CamStudio_Pocket", "Radial Stock to Leave"), form.radialStockToLeave
         )
