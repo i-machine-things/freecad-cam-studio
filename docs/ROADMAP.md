@@ -164,7 +164,8 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       **V1 scope, stated plainly**: only the operation's single first plunge / single final
       cutting move are treated (same single-entry-point scope as the Helix ramp, not per-level or
       per-region); only a straight (G1) first/last move is supported — an arc (G2/G3) there is
-      skipped rather than guessing a tangent direction; **mutually exclusive with `RampType=Helix`**
+      skipped rather than guessing a tangent direction; ~~mutually exclusive with `RampType=Helix`~~
+      (lifted later — leads and Helix now combine, see the parity map)
       for now (combining a shifted entry point with a spiral descent needs more design than this
       pass did) — verified via screenshot that the checkboxes visibly disable when Helix is
       selected. **Pocket-geometry-aware by rejection** (PR #1 review): each lead's swept cutter
@@ -327,8 +328,11 @@ removed** (Allan: "offset means offset"); the op pins `ClearingPattern` to Offse
 restore.
 
 ### Behavior differences the screenshots show
-- **Leads and Helix ramp work together in Fusion** (both on in the same capture). Ours makes them
-  mutually exclusive. That's a gap, not a design choice.
+- **Leads and Helix ramp work together in Fusion** (both on in the same capture). **Built**: the
+  lead-in moves the entry point out to the lead's outer end, the helix descends there (its own fit
+  check runs at that point), and the lead carries the tool into the cut at full depth. The helix
+  now makes whole revolutions so it bottoms out on its own entry point, instead of finishing
+  part-way round and cutting straight across the circle at full depth.
 - **Default values seen in the capture** (no tool was selected, so these may be fallbacks rather
   than tool-derived): lead radii 0.025 in, sweep 90 deg, linear lead 0.025 in, Lead-In and Lead-Out
   both on; ramp angle 2 deg, max ramp stepdown 0.025 in, ramp clearance height 0.100 in, helical

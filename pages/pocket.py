@@ -372,11 +372,7 @@ class LinkingPage(_BarPage):
         # Lead-In and Lead-Out: enabled separately, each an arc tangent to the cut (radius +
         # sweep) with an optional straight leg outside it -- see ops/pocket.py's
         # _applyLeadInOut. Row order follows Fusion's Linking tab.
-        helixNote = translate(
-            "CamStudio_Pocket", "Not available while Ramp Type is Helix (the helix is the entry)."
-        )
         form.useLeadIn = QtWidgets.QCheckBox(translate("CamStudio_Pocket", "Lead-In (Entry)"))
-        form.useLeadIn.setToolTip(helixNote)
         form.leadInRadius = _quantity_spinbox()
         form.leadInSweepAngle = _quantity_spinbox(unit="deg")
         form.leadInDistance = _quantity_spinbox()
@@ -384,7 +380,6 @@ class LinkingPage(_BarPage):
             translate("CamStudio_Pocket", "Perpendicular Lead-In")
         )
         form.useLeadOut = QtWidgets.QCheckBox(translate("CamStudio_Pocket", "Lead-Out (Exit)"))
-        form.useLeadOut.setToolTip(helixNote)
         form.sameAsLeadIn = QtWidgets.QCheckBox(
             translate("CamStudio_Pocket", "Same as Lead-In")
         )
@@ -466,16 +461,11 @@ class LinkingPage(_BarPage):
         self.form.helicalRampDiameter.setEnabled(isHelix)
         self.form.minimumRampDiameter.setEnabled(isHelix)
         self.form.maxRampStepdown.setEnabled(isHelix)
-        # Mutually exclusive with Lead-In/Lead-Out for now -- see ops/pocket.py's
-        # _applyLeadInOut docstring.
-        self.form.useLeadIn.setEnabled(not isHelix)
-        self.form.useLeadOut.setEnabled(not isHelix)
         self.updateLeadInOutFieldsEnabled(obj)
 
     def updateLeadInOutFieldsEnabled(self, obj):
         form = self.form
-        notHelix = obj.RampType != "Helix"
-        inActive = bool(obj.UseLeadIn) and notHelix
+        inActive = bool(obj.UseLeadIn)
         for widget in (
             form.leadInRadius,
             form.leadInSweepAngle,
@@ -483,7 +473,7 @@ class LinkingPage(_BarPage):
             form.leadInPerpendicular,
         ):
             widget.setEnabled(inActive)
-        outActive = bool(obj.UseLeadOut) and notHelix
+        outActive = bool(obj.UseLeadOut)
         form.sameAsLeadIn.setEnabled(outActive)
         ownValues = outActive and not obj.SameAsLeadIn
         for widget in (

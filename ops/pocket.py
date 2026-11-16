@@ -35,8 +35,8 @@ at all:
    a lead (an optional straight leg, then an optional arc tangent to the
    first cut), so the tool is already moving in the cut direction, at
    cutting feed, before it reaches full engagement (mirror at the tail
-   for lead-out). Mutually exclusive with
-   RampType=Helix for now (see execute()). See _applyLeadInOut's
+   for lead-out). Works together with a Helix ramp: the helix descends at
+   the lead's outer end (see execute()). See _applyLeadInOut's
    docstring for the full V1 scope statement.
 """
 
@@ -185,8 +185,8 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             legacyLeads = bool(obj.UseLeadInOut)
             obj.removeProperty("UseLeadInOut")
         for name, doc in (
-            ("UseLeadIn", "Enable the Lead-In (entry) move. Ignored when Ramp Type is Helix."),
-            ("UseLeadOut", "Enable the Lead-Out (exit) move. Ignored when Ramp Type is Helix."),
+            ("UseLeadIn", "Enable the Lead-In (entry) move"),
+            ("UseLeadOut", "Enable the Lead-Out (exit) move"),
         ):
             if not hasattr(obj, name):
                 obj.addProperty(
@@ -311,12 +311,14 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         if finishingPasses > 0 and obj.ExtraOffset.Value != 0:
             self._appendFinishingPasses(obj, finishingPasses)
 
-        rampType = getattr(obj, "RampType", "Plunge")
-        if rampType == "Helix":
-            self._applyHelixRampEntry(obj)
-        elif getattr(obj, "UseLeadIn", False) or getattr(obj, "UseLeadOut", False):
-            # Mutually exclusive with Helix for now -- see _applyLeadInOut's docstring.
+        # Leads first, then the ramp, as Fusion allows both at once: the lead-in moves the
+        # plunge out to the lead's outer end, and the helix then descends around *that*
+        # point (its own fit check runs there), so the tool spirals down off the wall and
+        # the lead carries it into the cut at full depth.
+        if getattr(obj, "UseLeadIn", False) or getattr(obj, "UseLeadOut", False):
             self._applyLeadInOut(obj)
+        if getattr(obj, "RampType", "Plunge") == "Helix":
+            self._applyHelixRampEntry(obj)
         return result
 
     def _appendFinishingPasses(self, obj, count):
@@ -571,6 +573,11 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         maxTotalAngle = self.MAX_RAMP_REVOLUTIONS * 2 * math.pi
         if totalAngle > maxTotalAngle:
             totalAngle = maxTotalAngle
+        # Whole revolutions, so the spiral finishes back on the entry point -- the plunge
+        # target the rest of the path continues from. A fractional last turn would end
+        # somewhere else on the circle and need a straight move across the helix at full
+        # depth to get back. Rounding up only makes each turn slightly shallower.
+        totalAngle = math.ceil(totalAngle / (2 * math.pi) - 1e-9) * 2 * math.pi
 
         center = FreeCAD.Vector(
             start.x + radius * math.cos(centerAngle), start.y + radius * math.sin(centerAngle), 0
