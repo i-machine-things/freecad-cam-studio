@@ -208,21 +208,7 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         form.resetFeeds.clicked.connect(self._onResetFeeds)
         form.feedSource = QtWidgets.QLabel()
         form.feedSource.setWordWrap(True)
-        form.materialChipload = QtWidgets.QPushButton(
-            translate("CamStudio_Pocket", "Material Chipload...")
-        )
-        form.materialChipload.setToolTip(
-            translate(
-                "CamStudio_Pocket",
-                "Edit the stock material's feed per tooth by tool diameter (used by Reset to "
-                "Defaults and for new operations)",
-            )
-        )
-        form.materialChipload.clicked.connect(self._onMaterialChipload)
-        buttons = QtWidgets.QHBoxLayout()
-        buttons.addWidget(form.resetFeeds)
-        buttons.addWidget(form.materialChipload)
-        fs_layout.addRow(buttons)
+        fs_layout.addRow(form.resetFeeds)
         fs_layout.addRow(form.feedSource)
         form.chipThinning.clicked.connect(self._refreshDerived)
         fs_group.setContentLayout(fs_layout)
@@ -339,7 +325,6 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         f.spindleSpeed.setProperty("camStudioLoaded", f.spindleSpeed.value())
         f.rampSpindleSpeed.setProperty("camStudioLoaded", f.rampSpindleSpeed.value())
         f.chipThinning.setChecked(bool(getattr(obj, "ChipThinning", False)))
-        f.materialChipload.setEnabled(self._stockHasMachiningMaterial(obj))
         self._refreshDerived()
         try:
             f.feedSource.setText(self._describeDefaults(obj))
@@ -350,13 +335,6 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         # Stepover lives on the Passes bar; keep the chip-thinning line in step with it.
         if prop in ("StepOver", "ChipThinning") and hasattr(self.form, "chipThinningInfo"):
             self._refreshChipThinning()
-
-    def _stockHasMachiningMaterial(self, obj):
-        import PathScripts.PathUtils as PathUtils
-        from cs_materials import library
-
-        job = PathUtils.findParentJob(obj)
-        return job is not None and library.stockMaterial(job) is not None
 
     def _commitFeedFields(self, obj):
         # Only write a field the user changed since it was loaded (the boxes round to their
@@ -429,22 +407,6 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             f.cuttingFeedrate.setValue(mmPerMin / 60.0 / f.feedScale)
             f.cuttingFeedrate.editingFinished.emit()
 
-    def _onMaterialChipload(self):
-        import PathScripts.PathUtils as PathUtils
-        from cs_materials import library
-        from widgets.chipload_editor import ChiploadDialog
-
-        job = PathUtils.findParentJob(self.obj)
-        material = library.stockMaterial(job) if job is not None else None
-        if material is None:
-            return
-        dialog = ChiploadDialog(material, self.form)
-        if dialog.exec_() and dialog.saved is not None:
-            if dialog.saved.UUID != material.UUID:
-                # A built-in material got an inheriting User-library copy: use that.
-                job.Stock.ShapeMaterial = dialog.saved
-            self.form.feedSource.setText(self._describeDefaults(self.obj))
-
     def _onResetFeeds(self):
         obj = self.obj
         obj.Proxy.loadDefaultFeeds(obj)
@@ -463,14 +425,12 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             defaults.get("material", "?"),
             defaults.get("toolMaterial", "?"),
         )
-        if defaults.get("source") == "tool":
-            text += translate("CamStudio_Pocket", "; chipload from the tool.")
-        elif defaults.get("source") == "material":
-            text += translate("CamStudio_Pocket", "; chipload from the material.")
+        if defaults.get("chipload") is not None:
+            text += translate("CamStudio_Pocket", "; feeds from the tool's chipload.")
         else:
             text += translate(
                 "CamStudio_Pocket",
-                "; no chipload for this tool, so feeds come from the tool controller.",
+                "; the tool has no Chipload set, so feeds come from the tool controller.",
             )
         return text
 

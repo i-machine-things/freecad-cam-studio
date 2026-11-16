@@ -151,18 +151,17 @@ This one isn't a FreeCAD-reuse case -- it's a generic, widely-known Qt UI patter
 `QToolButton` header toggling a hidden content widget), not derived from Autodesk's code or assets.
 Every operation page should use it for its sections instead of `QGroupBox` going forward.
 
-## Materials: extend FreeCAD's material system, don't replace it
+## Materials: use FreeCAD's material system
 
 Default feeds and speeds come from the Job's stock material -- FreeCAD's own
-`Stock.ShapeMaterial`, using FreeCAD's Machinability model for surface speeds. The one thing
-FreeCAD's model lacks, a chipload table, is added as a *new material model*
-(`cs_materials/Models/CAMStudio/CamStudioChipload.yml`) registered through the Material
-module's supported per-module setting (`Mod/Material/Resources/Modules/CamStudio/ModuleModelDir`,
-written by `Init.py`). Materials remain ordinary FreeCAD materials in FreeCAD's libraries, so
-plain FreeCAD and stock CAM keep working with them (verified with CAM Studio disabled).
-FreeCAD's Python API can't set 2D-array values, so `cs_materials/library.py` writes the
-material file in FreeCAD's YAML format and asks FreeCAD to refresh its libraries.
+`Stock.ShapeMaterial`, using FreeCAD's Machinability model for surface speeds -- and the tool
+bit's own Chipload (`cs_materials/library.py`). Materials stay ordinary FreeCAD materials.
 
 The Job editor stays FreeCAD's: `pages/setup.py`'s `JobViewProvider` (a thin subclass of FreeCAD's
 Job view provider, switched onto existing Jobs while CAM Studio is active) only adds a labelled
 Material row to Job Edit's Stock section.
+
+(A CAM Studio material model for per-material chipload tables was built -- an add-on can
+register material models via `Mod/Material/Resources/Modules/<name>/ModuleModelDir`, and it
+round-tripped through vanilla FreeCAD -- then dropped as low-value; `Init.py` removes that
+registration from users' settings.)

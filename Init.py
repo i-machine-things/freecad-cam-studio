@@ -1,31 +1,20 @@
 """App-level init for CAM Studio (runs in GUI and console mode).
 
-Registers CAM Studio's material model folder (cs_materials/Models: the "CAM Studio Chipload"
-model) with FreeCAD's material system, the supported way for a module to add material
-models. Only the model folder is registered, no material folder: materials themselves stay
-in FreeCAD's own libraries so plain FreeCAD / stock CAM still find them -- see
-cs_materials/library.py.
+Nothing to register. An earlier build registered a CAM Studio material model folder with
+FreeCAD's material system; that model was dropped, so remove any such setting a previous run
+left behind (harmless if left, but no reason to keep it).
 """
-
-import os
 
 import FreeCAD
 
 
-def _registerMaterialModels():
-    # FreeCAD runs this file without __file__; find the add-on through its own package.
-    import cs_materials
-
-    here = os.path.dirname(os.path.dirname(os.path.abspath(cs_materials.__file__)))
-    group = FreeCAD.ParamGet(
-        "User parameter:BaseApp/Preferences/Mod/Material/Resources/Modules/CamStudio"
-    )
-    group.SetString("ModuleModelDir", os.path.join(here, "cs_materials", "Models"))
-    group.SetString("ModuleIcon", os.path.join(here, "Resources", "icons", "workbench.svg"))
-    group.SetBool("ModuleReadOnly", True)
+def _removeOldMaterialModelRegistration():
+    modules = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/Material/Resources/Modules")
+    if "CamStudio" in modules.GetGroups():
+        modules.RemGroup("CamStudio")
 
 
 try:
-    _registerMaterialModels()
+    _removeOldMaterialModelRegistration()
 except Exception as e:  # never block FreeCAD startup over this
-    FreeCAD.Console.PrintWarning("CAM Studio: could not register material models: %s\n" % e)
+    FreeCAD.Console.PrintWarning("CAM Studio: %s\n" % e)

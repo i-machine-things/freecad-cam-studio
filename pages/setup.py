@@ -8,8 +8,8 @@ post processor, tools -- unchanged. CAM Studio adds one row to its Stock section
 - Change... opens FreeCAD's own machining-material picker (the same one as the panel's
   unlabelled material button, which this row replaces) and stores the choice where stock
   CAM keeps it: the Job's Stock.ShapeMaterial.
-The material's surface speeds -- and CAM Studio's chipload tables for it, edited from an
-operation's Tool bar (pages/pocket.py) -- drive each operation's default feeds and speeds.
+The material's surface speeds, with each tool's own Chipload, drive each operation's default
+feeds and speeds (cs_materials/library.py).
 
 It's added by JobViewProvider, a thin subclass of FreeCAD's Job view provider: Jobs created
 with CAM Studio's Job button get it, and existing Jobs are switched over while CAM Studio is

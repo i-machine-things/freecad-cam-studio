@@ -245,7 +245,7 @@ type) stay as they are.
 |---|---|---|
 | Tool + Select... | Have | Combo + `widgets/tool_picker.py` |
 | Edit... (tool) | Missing | Edit the selected tool in place |
-| Feed & Speed: Preset | Missing | Named preset from the tool. Today the op copies the tool controller's values when created or when its tool changes |
+| Feed & Speed: Preset | Missing | Fusion's per-tool presets (one per material: surface speed + chipload); the right place for material-specific chiploads. Today defaults come from the stock material's surface speed + the tool's single Chipload |
 | Spindle Speed, Surface Speed, Ramp Spindle Speed | Have | **Per operation** (Allan's call: industry standard). Op emits `M3/M4 S` at its start when it differs from the tool controller and restores the controller's speed at its end; Ramp Spindle Speed switches only around the helix. Surface Speed is derived (edit it to set rpm) |
 | Cutting Feedrate, Feed per Tooth | Have | Per operation, fed into upstream generation via `opExecute`. Feed per Tooth derived from the tool's flutes |
 | Lead-In / Lead-Out / Ramp / Plunge Feedrate | Have | Per operation, each applied to its own moves |
@@ -355,31 +355,21 @@ restore.
 - **Chip Thinning** isn't visible in any of these captures. Still blocked on Allan.
 
 ## Stock material and default feeds & speeds (built 2026-11-15)
-Allan's request: pick a material per setup and have it drive default feeds and speeds -- built
-on **FreeCAD's own material system**, not a parallel library (an earlier CAM Studio-only library
-and Setup dialog were replaced; Allan: "I don't want to reinvent the wheel").
-- **Material** = the Job's `Stock.ShapeMaterial`, exactly where stock CAM keeps it. FreeCAD's
-  Machinability model supplies HSS/carbide surface speeds.
-- **Chipload** = CAM Studio's own material model, "CAM Studio Chipload"
-  (`cs_materials/Models/...`), registered with FreeCAD's material system by `Init.py`
-  (Material `ModuleModelDir`): feed-per-tooth tables by tool diameter for HSS and carbide.
-- **Compatibility, verified** (CAM Studio disabled, model unregistered): a material carrying our
-  model loads in plain FreeCAD with its surface speeds intact, documents open and re-save, and
-  the tables survive the round trip. Requires materials to live in FreeCAD's own libraries:
-  chipload edits save to FreeCAD's **User** library; a built-in material gets one inheriting copy
-  in `User/CAM Studio/` (reused on later edits). A dangling model-folder setting after
-  uninstall is harmless (verified). Not verified: editing such a material in vanilla FreeCAD's
-  material editor may drop the tables.
-- **UI**: FreeCAD's Job Edit, plus a labelled **Material: <name> [Change...]** row
-  in its Stock section (replaces the unlabelled material button). The material's chipload
-  tables are edited from a toolpath's Tool bar (**Material Chipload...**), not Job Edit. Double-click a Job, or the
-  toolbar's **Job** button, opens it. Menu: **Add Feeds & Speeds Materials** writes the
-  FeedsAndSpeeds addon's 15 materials (CC-BY, credited) into the User library on request.
-- **Defaults**: rpm = 1000*Vc/(pi*D) (no spindle cap); chipload = tool's own Chipload, else the
-  material table; cutting (and leads) = fz*flutes*rpm; plunge (and ramp) = fz*rpm. Applied when
-  an op is created or its tool changes. **Reset to Defaults** on the Tool bar's Feed & Speed section
-  re-applies them on demand, with a line saying where they come from (material + tool
-  material, and whether the chipload came from the tool or the material).
+Built on **FreeCAD's own material system** (Allan: "I don't want to reinvent the wheel"; an
+earlier CAM Studio-only library and Setup dialog were replaced).
+- **Material** = the Job's `Stock.ShapeMaterial`, where stock CAM keeps it, picked in FreeCAD's
+  Job Edit via CAM Studio's labelled **Material: <name> [Change...]** row (replaces the
+  unlabelled material button). FreeCAD's Machinability model gives HSS/carbide surface speeds.
+- **Chipload** = the tool bit's own Chipload field. A per-material chipload table (as a CAM
+  Studio material model) was built and then **removed**: the tool's chipload always won, and a
+  table per material keyed only by diameter can't distinguish tools of the same size. The
+  proper home for material-specific chiploads is Fusion's per-tool **Preset** (see Tool tab
+  row "Feed & Speed: Preset").
+- **Defaults**: rpm = 1000*Vc/(pi*D) (no spindle cap); cutting (and leads) = fz*flutes*rpm;
+  plunge (and ramp) = fz*rpm; without a tool chipload, feeds stay at the tool controller's.
+  Applied when an op is created or its tool changes, and on demand with **Reset to Defaults**.
+- Menu **Add Feeds & Speeds Materials** writes the FeedsAndSpeeds addon's 15 materials (CC-BY,
+  credited) into FreeCAD's User library on request.
 
 ## Phase 2 — 3D operations
 Parallel, Scallop, and other surface-finishing strategies. Spec and implement once Phase 1's UI
