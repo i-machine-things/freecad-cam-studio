@@ -17,6 +17,8 @@ No FreeCAD .ui resource file is loaded -- this form is built directly in
 Python so CAM Studio owns the full layout, not just the data wiring.
 """
 
+import math
+
 import FreeCAD
 import FreeCADGui as Gui
 from PySide import QtWidgets
@@ -80,6 +82,23 @@ def _feed_display_unit():
     return unit, FreeCAD.Units.Quantity("1 " + unit).Value, decimals
 
 
+def _length_display_unit():
+    """(unit label, mm per display unit, decimals) for small lengths such as feed per tooth,
+    following the user's unit schema."""
+    lengthUnit = FreeCAD.Units.Quantity(1.0, FreeCAD.Units.Length).getUserPreferred()[2]
+    if lengthUnit in ("in", "ft", "thou", "yd", "mi"):
+        return "in", 25.4, 4
+    return "mm", 1.0, 3
+
+
+def _rate_box(suffix, decimals, maximum=1e7):
+    box = QtWidgets.QDoubleSpinBox()
+    box.setRange(0, maximum)
+    box.setDecimals(decimals)
+    box.setSuffix(" " + suffix)
+    return box
+
+
 class _BarPage(PathOpGui.TaskPanelPage):
     """A page for one bar of the dialog. Guards initPage so it runs once: the Tool page
     initializes these itself, and the upstream TaskPanel loop may visit them again."""
@@ -120,10 +139,55 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         tool_row.addWidget(form.selectToolButton)
         form.coolantController = QtWidgets.QComboBox()
         tool_layout.addRow(translate("CamStudio_Pocket", "Tool"), tool_row)
-        tool_layout.addRow(translate("CamStudio_Pocket", "Coolant"), form.coolantController)
         tool_group.setContentLayout(tool_layout)
         layout.addWidget(tool_group)
         form.selectToolButton.clicked.connect(self._onSelectTool)
+
+        # Feed & Speed, per operation (Fusion's Tool tab). Values live on the op (see
+        # ops/pocket.py loadFeedsFromTool); picking another tool reloads them from it.
+        # Surface Speed, Feed per Tooth and Plunge Feed per Revolution are derived: editing
+        # one recalculates its partner field instead of being stored.
+        feedUnit, form.feedScale, feedDecimals = _feed_display_unit()
+        lenUnit, form.lenScale, lenDecimals = _length_display_unit()
+        imperial = lenUnit == "in"
+        form.surfaceUnit = "ft/min" if imperial else "m/min"
+        form.surfaceScale = 304.8 if imperial else 1000.0  # mm/min per display unit
+        fs_group = CollapsibleSection(translate("CamStudio_Pocket", "Feed && Speed"))
+        fs_layout = QtWidgets.QFormLayout()
+        fs_layout.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
+        form.spindleSpeed = _rate_box("rpm", 0, 200000)
+        form.surfaceSpeed = _rate_box(form.surfaceUnit, 2)
+        form.rampSpindleSpeed = _rate_box("rpm", 0, 200000)
+        form.cuttingFeedrate = _rate_box(feedUnit, feedDecimals)
+        form.feedPerTooth = _rate_box(lenUnit, lenDecimals, 1000)
+        form.leadInFeedrate = _rate_box(feedUnit, feedDecimals)
+        form.leadOutFeedrate = _rate_box(feedUnit, feedDecimals)
+        form.rampFeedrate = _rate_box(feedUnit, feedDecimals)
+        form.plungeFeedrate = _rate_box(feedUnit, feedDecimals)
+        form.plungeFeedPerRev = _rate_box(lenUnit, lenDecimals, 1000)
+        for label, widget in (
+            ("Spindle Speed", form.spindleSpeed),
+            ("Surface Speed", form.surfaceSpeed),
+            ("Ramp Spindle Speed", form.rampSpindleSpeed),
+            ("Cutting Feedrate", form.cuttingFeedrate),
+            ("Feed per Tooth", form.feedPerTooth),
+            ("Lead-In Feedrate", form.leadInFeedrate),
+            ("Lead-Out Feedrate", form.leadOutFeedrate),
+            ("Ramp Feedrate", form.rampFeedrate),
+            ("Plunge Feedrate", form.plungeFeedrate),
+            ("Plunge Feed per Revolution", form.plungeFeedPerRev),
+            ("Coolant", form.coolantController),
+        ):
+            fs_layout.addRow(translate("CamStudio_Pocket", label), widget)
+        fs_group.setContentLayout(fs_layout)
+        layout.addWidget(fs_group)
+        # Keep each derived field and its partner in step as either is edited.
+        form.spindleSpeed.editingFinished.connect(self._refreshDerived)
+        form.cuttingFeedrate.editingFinished.connect(self._refreshDerived)
+        form.plungeFeedrate.editingFinished.connect(self._refreshDerived)
+        form.surfaceSpeed.editingFinished.connect(self._onSurfaceSpeedEdited)
+        form.feedPerTooth.editingFinished.connect(self._onFeedPerToothEdited)
+        form.plungeFeedPerRev.editingFinished.connect(self._onPlungePerRevEdited)
 
         layout.addStretch(1)
         return form
@@ -200,20 +264,112 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         self.selectInComboBox(tc.Label, self.form.toolController)
         self.setDirty()
 
+    # -- Feed & Speed ----------------------------------------------------------------
+    def _feedFields(self):
+        """(property, spin box) for the op's own speed-type feed properties (mm/s)."""
+        f = self.form
+        return [
+            ("CuttingFeedrate", f.cuttingFeedrate),
+            ("LeadInFeedrate", f.leadInFeedrate),
+            ("LeadOutFeedrate", f.leadOutFeedrate),
+            ("RampFeedrate", f.rampFeedrate),
+            ("PlungeFeedrate", f.plungeFeedrate),
+        ]
+
+    def _toolGeometry(self):
+        tc = getattr(self.obj, "ToolController", None)
+        tool = tc.Tool if tc is not None else None
+        diameter = tool.Diameter.Value if tool is not None else 0.0
+        flutes = int(getattr(tool, "Flutes", 0) or 0) if tool is not None else 0
+        return diameter, flutes
+
+    def _setFeedFields(self, obj):
+        f = self.form
+        f.spindleSpeed.setValue(obj.SpindleSpeed)
+        f.rampSpindleSpeed.setValue(obj.RampSpindleSpeed)
+        for prop, box in self._feedFields():
+            box.setValue(getattr(obj, prop).Value / f.feedScale)
+            box.setProperty("camStudioLoaded", box.value())
+        f.spindleSpeed.setProperty("camStudioLoaded", f.spindleSpeed.value())
+        f.rampSpindleSpeed.setProperty("camStudioLoaded", f.rampSpindleSpeed.value())
+        self._refreshDerived()
+
+    def _commitFeedFields(self, obj):
+        # Only write a field the user changed since it was loaded (the boxes round to their
+        # display precision -- see _qty_commit).
+        f = self.form
+        for prop, box in [("SpindleSpeed", f.spindleSpeed), ("RampSpindleSpeed", f.rampSpindleSpeed)]:
+            if box.value() != box.property("camStudioLoaded"):
+                setattr(obj, prop, box.value())
+                box.setProperty("camStudioLoaded", box.value())
+        for prop, box in self._feedFields():
+            if box.value() != box.property("camStudioLoaded"):
+                setattr(obj, prop, box.value() * f.feedScale)
+                box.setProperty("camStudioLoaded", box.value())
+
+    def _refreshDerived(self):
+        f = self.form
+        diameter, flutes = self._toolGeometry()
+        rpm = f.spindleSpeed.value()
+        cutting = f.cuttingFeedrate.value() * f.feedScale * 60.0  # mm/min
+        plunge = f.plungeFeedrate.value() * f.feedScale * 60.0
+        f.surfaceSpeed.setValue(math.pi * diameter * rpm / f.surfaceScale)
+        f.feedPerTooth.setValue(cutting / (rpm * flutes) / f.lenScale if rpm > 0 and flutes > 0 else 0)
+        f.feedPerTooth.setEnabled(flutes > 0)
+        f.plungeFeedPerRev.setValue(plunge / rpm / f.lenScale if rpm > 0 else 0)
+
+    def _onSurfaceSpeedEdited(self):
+        f = self.form
+        diameter, _flutes = self._toolGeometry()
+        if diameter > 0:
+            f.spindleSpeed.setValue(f.surfaceSpeed.value() * f.surfaceScale / (math.pi * diameter))
+            f.spindleSpeed.editingFinished.emit()
+
+    def _onFeedPerToothEdited(self):
+        f = self.form
+        _diameter, flutes = self._toolGeometry()
+        rpm = f.spindleSpeed.value()
+        if flutes > 0 and rpm > 0:
+            mmPerMin = f.feedPerTooth.value() * f.lenScale * rpm * flutes
+            f.cuttingFeedrate.setValue(mmPerMin / 60.0 / f.feedScale)
+            f.cuttingFeedrate.editingFinished.emit()
+
+    def _onPlungePerRevEdited(self):
+        f = self.form
+        rpm = f.spindleSpeed.value()
+        if rpm > 0:
+            mmPerMin = f.plungeFeedPerRev.value() * f.lenScale * rpm
+            f.plungeFeedrate.setValue(mmPerMin / 60.0 / f.feedScale)
+            f.plungeFeedrate.editingFinished.emit()
+
     def getFields(self, obj):
+        before = obj.ToolController
         self.updateToolController(obj, self.form.toolController)
         self.updateCoolant(obj, self.form.coolantController)
+        if not hasattr(obj, "CuttingFeedrate"):
+            return
+        if obj.ToolController is not before:
+            # A different tool: start again from its values, as Fusion does.
+            obj.Proxy.loadFeedsFromTool(obj)
+            self._setFeedFields(obj)
+        else:
+            self._commitFeedFields(obj)
 
     def setFields(self, obj):
         self.setupToolController(obj, self.form.toolController)
         self._pruneToolComboSentinels(obj)
         self.setupCoolant(obj, self.form.coolantController)
+        if hasattr(obj, "CuttingFeedrate"):
+            self._setFeedFields(obj)
 
     def getSignalsForUpdate(self, obj):
+        f = self.form
         return [
-            self.form.toolController.currentIndexChanged,
-            self.form.coolantController.currentIndexChanged,
-        ]
+            f.toolController.currentIndexChanged,
+            f.coolantController.currentIndexChanged,
+            f.spindleSpeed.editingFinished,
+            f.rampSpindleSpeed.editingFinished,
+        ] + [box.editingFinished for _prop, box in self._feedFields()]
 
 
 class HeightsBar(PathOpGui.TaskPanelPage):

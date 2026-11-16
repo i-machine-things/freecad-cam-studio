@@ -155,6 +155,24 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
                 ),
             )
             obj.MaxRampStepdown = 0
+        # Feed & Speed, per operation (as in Fusion): copied from the tool controller when
+        # the op is created or its tool changes (loadFeedsFromTool), then the op's own.
+        added = False
+        for name, ptype, doc in (
+            ("SpindleSpeed", "App::PropertyFloat", "Spindle speed (rpm) for this operation"),
+            ("RampSpindleSpeed", "App::PropertyFloat", "Spindle speed (rpm) while ramping"),
+            ("CuttingFeedrate", "App::PropertySpeed", "Feedrate for cutting moves"),
+            ("LeadInFeedrate", "App::PropertySpeed", "Feedrate for the Lead-In move"),
+            ("LeadOutFeedrate", "App::PropertySpeed", "Feedrate for the Lead-Out move"),
+            ("RampFeedrate", "App::PropertySpeed", "Feedrate while ramping (helix)"),
+            ("PlungeFeedrate", "App::PropertySpeed", "Feedrate for straight plunges"),
+        ):
+            if not hasattr(obj, name):
+                obj.addProperty(ptype, name, "Feed & Speed", QT_TRANSLATE_NOOP("App::Property", doc))
+                added = True
+        if added and getattr(obj, "ToolController", None) is not None:
+            # Restoring a document made before these existed: start from its tool.
+            self.loadFeedsFromTool(obj)
         if not hasattr(obj, "RetractHeight") and hasattr(obj, "ClearanceHeight"):
             obj.addProperty(
                 "App::PropertyDistance",
@@ -320,6 +338,29 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         finally:
             obj.FinalDepth = original
 
+    def loadFeedsFromTool(self, obj):
+        """Copy the tool controller's spindle speed and feeds into this op's own Feed &
+        Speed properties (Fusion fills an operation from the tool's preset the same way)."""
+        tc = getattr(obj, "ToolController", None)
+        if tc is None:
+            return
+        obj.SpindleSpeed = tc.SpindleSpeed
+        obj.RampSpindleSpeed = tc.SpindleSpeed
+        obj.CuttingFeedrate = tc.HorizFeed.Value
+        obj.LeadInFeedrate = tc.HorizFeed.Value
+        obj.LeadOutFeedrate = tc.HorizFeed.Value
+        obj.RampFeedrate = tc.VertFeed.Value
+        obj.PlungeFeedrate = tc.VertFeed.Value
+
+    def opExecute(self, obj, *args, **kwargs):
+        # Base.execute has just read the tool controller's feeds into self.horizFeed /
+        # self.vertFeed; replace them with this op's own before the toolpath is generated,
+        # so every move upstream emits carries the op's feeds.
+        if hasattr(obj, "CuttingFeedrate"):
+            self.horizFeed = obj.CuttingFeedrate.Value
+            self.vertFeed = obj.PlungeFeedrate.Value
+        return super().opExecute(obj, *args, **kwargs)
+
     def execute(self, obj):
         # Path.Op.Base.execute's own docstring says "do not overwrite!" -- let it build the
         # correct, normal (straight-plunge) toolpath first, then post-process the result.
@@ -349,7 +390,41 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             self._applyLeadInOut(obj)
         if getattr(obj, "RampType", "Plunge") == "Helix":
             self._applyHelixRampEntry(obj)
+        if hasattr(obj, "SpindleSpeed"):
+            self._applySpindleSpeed(obj)
         return result
+
+    def _spindleCommand(self, rpm):
+        """M3/M4 S<rpm> in the tool's own direction (or M5 for 0), the same form FreeCAD's
+        tool change emits. None for a tool that doesn't rotate."""
+        direction = self.tool.Proxy.get_spindle_direction().value if self.tool else None
+        if direction not in ("M3", "M4"):
+            return None
+        if rpm <= 0:
+            return Path.Command("M5")
+        return Path.Command(direction, {"S": rpm})
+
+    def _applySpindleSpeed(self, obj):
+        """Per-operation spindle speed. FreeCAD sets the spindle once, at the tool change,
+        from the tool controller. When this op's speed differs, set it at the op's start
+        and put the controller's speed back at its end, so a following op on the same tool
+        still runs at the speed its own tool change implies."""
+        tcSpeed = obj.ToolController.SpindleSpeed
+        if abs(obj.SpindleSpeed - tcSpeed) < 1e-9:
+            return
+        start = self._spindleCommand(obj.SpindleSpeed)
+        restore = self._spindleCommand(tcSpeed)
+        if start is None:
+            return
+        cmds = list(obj.Path.Commands)
+        # After the op's leading comment lines, before any motion.
+        i = 0
+        while i < len(cmds) and cmds[i].Name.startswith("("):
+            i += 1
+        cmds.insert(i, start)
+        if restore is not None:
+            cmds.append(restore)
+        obj.Path = Path.Path(cmds)
 
     def _appendFinishingPasses(self, obj, count):
         """Fusion's "Finishing Passes": extra wall-cleanup passes stepping the radial Stock
@@ -477,6 +552,7 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
                 rapidTo = rampTop
                 start = FreeCAD.Vector(start.x, start.y, rampTop)
 
+        self.rampFeed = obj.RampFeedrate.Value if hasattr(obj, "RampFeedrate") else self.vertFeed
         placement = self._fitHelixRamp(obj, end)
         if placement is None:
             Path.Log.warning(
@@ -494,6 +570,13 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
 
         if rapidTo is not None:
             rampCmds = [Path.Command("G0", {"Z": rapidTo})] + rampCmds
+        # Ramp Spindle Speed: switch for the helix only, then back to the op's speed.
+        rampRpm = getattr(obj, "RampSpindleSpeed", None)
+        opRpm = getattr(obj, "SpindleSpeed", None)
+        if rampRpm is not None and rampRpm > 0 and abs(rampRpm - opRpm) > 1e-9:
+            during, after = self._spindleCommand(rampRpm), self._spindleCommand(opRpm)
+            if during is not None and after is not None:
+                rampCmds = [during] + rampCmds + [after]
         newCmds = list(cmds[:plungeIdx]) + rampCmds + list(cmds[plungeIdx + 1 :])
         obj.Path = Path.Path(newCmds)
         # The cycle-time estimate was already computed by super().execute(obj) against the
@@ -685,7 +768,7 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             x = center.x + radius * math.cos(angle)
             y = center.y + radius * math.sin(angle)
             z = start.z - t * height
-            cmds.append(Path.Command("G1", self._withFeed({"X": x, "Y": y, "Z": z}, self.vertFeed)))
+            cmds.append(Path.Command("G1", self._withFeed({"X": x, "Y": y, "Z": z}, getattr(self, "rampFeed", self.vertFeed))))
 
         last = cmds[-1].Parameters
         if abs(last["X"] - end.x) > 1e-4 or abs(last["Y"] - end.y) > 1e-4:
@@ -736,6 +819,8 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         # Only a preference: the other side is still tried, and the fit check decides.
         sides = (1, -1) if getattr(obj, "CutMode", "Climb") == "Climb" else (-1, 1)
 
+        self.leadInFeed = obj.LeadInFeedrate.Value if hasattr(obj, "LeadInFeedrate") else self.horizFeed
+        self.leadOutFeed = obj.LeadOutFeedrate.Value if hasattr(obj, "LeadOutFeedrate") else self.horizFeed
         changed = False
         for which, enabled, insert, clearance in (
             ("Lead-In", getattr(obj, "UseLeadIn", False), self._insertLeadIn, leadInClearance),
@@ -929,10 +1014,11 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         # Then travel the lead inward: straight leg to the junction, arc into the true start.
         moves = []
         jx, jy = lead["junction"]
+        feed = getattr(self, "leadInFeed", self.horizFeed)
         if lead["hasLinear"]:
-            moves.append(self._leadLine(jx, jy, end.z))
+            moves.append(self._leadLine(jx, jy, end.z, feed))
         if lead["center"] is not None:
-            moves.append(self._leadArc((jx, jy), (end.x, end.y), end.z, lead))
+            moves.append(self._leadArc((jx, jy), (end.x, end.y), end.z, lead, feed))
         newCmds[plungeIdx + 1 : plungeIdx + 1] = moves
         return newCmds
 
@@ -971,21 +1057,22 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             return None
 
         moves = []
+        feed = getattr(self, "leadOutFeed", self.horizFeed)
         if lead["center"] is not None:
-            moves.append(self._leadArc((endX, endY), lead["junction"], endZ, lead))
+            moves.append(self._leadArc((endX, endY), lead["junction"], endZ, lead, feed))
         if lead["hasLinear"]:
-            moves.append(self._leadLine(lead["far"][0], lead["far"][1], endZ))
+            moves.append(self._leadLine(lead["far"][0], lead["far"][1], endZ, feed))
         return cmds[: lastCutIdx + 1] + moves + cmds[lastCutIdx + 1 :]
 
-    def _leadLine(self, x, y, z):
-        return Path.Command("G1", self._withFeed({"X": x, "Y": y, "Z": z}, self.horizFeed))
+    def _leadLine(self, x, y, z, feed):
+        return Path.Command("G1", self._withFeed({"X": x, "Y": y, "Z": z}, feed))
 
-    def _leadArc(self, fromXY, toXY, z, lead):
+    def _leadArc(self, fromXY, toXY, z, lead, feed):
         """A true arc move (G3 counter-clockwise / G2 clockwise) between two points on the
         lead's circle. I/J are the center's offset from the arc's start point."""
         cx, cy = lead["center"]
         params = {"X": toXY[0], "Y": toXY[1], "Z": z, "I": cx - fromXY[0], "J": cy - fromXY[1]}
-        return Path.Command("G3" if lead["ccw"] else "G2", self._withFeed(params, self.horizFeed))
+        return Path.Command("G3" if lead["ccw"] else "G2", self._withFeed(params, feed))
 
 
 def Create(name, obj=None, parentJob=None):
@@ -993,4 +1080,5 @@ def Create(name, obj=None, parentJob=None):
     if obj is None:
         obj = FreeCAD.ActiveDocument.addObject("Path::FeaturePython", name)
     obj.Proxy = ObjectPocket(obj, name, parentJob)
+    obj.Proxy.loadFeedsFromTool(obj)
     return obj

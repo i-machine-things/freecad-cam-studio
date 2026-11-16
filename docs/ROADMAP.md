@@ -244,11 +244,12 @@ type) stay as they are.
 |---|---|---|
 | Tool + Select... | Have | Combo + `widgets/tool_picker.py` |
 | Edit... (tool) | Missing | Edit the selected tool in place |
-| Feed & Speed: Preset | Missing | Named preset from the tool |
-| Spindle Speed, Surface Speed, Ramp Spindle Speed | Missing | Today these live only on FreeCAD's separate ToolController |
-| Cutting Feedrate, Feed per Tooth | Missing | Same |
-| Lead-In / Lead-Out / Transition / Ramp / Plunge Feedrate | Missing | Our leads and ramps use the ToolController's horizontal/vertical feeds |
-| Plunge Feed per Revolution | Missing | |
+| Feed & Speed: Preset | Missing | Named preset from the tool. Today the op copies the tool controller's values when created or when its tool changes |
+| Spindle Speed, Surface Speed, Ramp Spindle Speed | Have | **Per operation** (Allan's call: industry standard). Op emits `M3/M4 S` at its start when it differs from the tool controller and restores the controller's speed at its end; Ramp Spindle Speed switches only around the helix. Surface Speed is derived (edit it to set rpm) |
+| Cutting Feedrate, Feed per Tooth | Have | Per operation, fed into upstream generation via `opExecute`. Feed per Tooth derived from the tool's flutes |
+| Lead-In / Lead-Out / Ramp / Plunge Feedrate | Have | Per operation, each applied to its own moves |
+| Transition Feedrate | Missing | For stay-down links; we can't tell links from cuts in FreeCAD's output yet (same blocker as Maximum Stay-Down Distance) |
+| Plunge Feed per Revolution | Have | Derived (edit it to set Plunge Feedrate) |
 | Coolant | Have | |
 
 ### Multi-axis tab (tool orientation)
