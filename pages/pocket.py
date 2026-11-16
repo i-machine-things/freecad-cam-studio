@@ -618,10 +618,14 @@ class PassesPage(_BarPage):
         passes_group = CollapsibleSection(translate("CamStudio_Pocket", "Passes"))
         passes_layout = QtWidgets.QFormLayout()
         passes_layout.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
+        # Fusion's "Sideways Compensation": which side of the path the tool sits on, Left or
+        # Right. Backed by FreeCAD's CutMode (Climb/Conventional); the mapping depends on the
+        # spindle direction, so the labels are filled in by _fillSidewaysCompensation.
         form.cutMode = QtWidgets.QComboBox()
-        form.stepOverPercent = QtWidgets.QSpinBox()
-        form.stepOverPercent.setRange(1, 100)
-        form.stepOverPercent.setSuffix("%")
+        # Fusion's "Maximum Stepover" is a distance. FreeCAD stores StepOver as a whole
+        # percent of the tool diameter, so the distance is converted (and snaps to 1%).
+        form.maxStepover = _quantity_spinbox()
+        form.stepoverInfo = QtWidgets.QLabel()
         form.radialStockToLeave = _quantity_spinbox()
         form.axialStockToLeave = _quantity_spinbox()
         form.minTravel = QtWidgets.QCheckBox(
@@ -646,8 +650,9 @@ class PassesPage(_BarPage):
         form.finishFeedrate.setRange(0, 100000)
         form.finishFeedrate.setDecimals(feedDecimals)
         form.finishFeedrate.setSuffix(" " + feedUnit)
-        passes_layout.addRow(translate("CamStudio_Pocket", "Cutting Direction"), form.cutMode)
-        passes_layout.addRow(translate("CamStudio_Pocket", "Stepover"), form.stepOverPercent)
+        passes_layout.addRow(translate("CamStudio_Pocket", "Sideways Compensation"), form.cutMode)
+        passes_layout.addRow(translate("CamStudio_Pocket", "Maximum Stepover"), form.maxStepover)
+        passes_layout.addRow("", form.stepoverInfo)
         passes_layout.addRow(
             translate("CamStudio_Pocket", "Radial Stock to Leave"), form.radialStockToLeave
         )
@@ -705,18 +710,77 @@ class PassesPage(_BarPage):
 
     def initBar(self, obj):
         self.setIcon(":/icons/CAM_Pocket.svg")
-        enumTups = PathPocketShape.ObjectPocket.pocketPropertyEnumerations(dataType="raw")
-        self.populateCombobox(
-            self.form,
-            enumTups,
-            [("cutMode", "CutMode")],
+        self._fillSidewaysCompensation(obj)
+
+    def updateData(self, obj, prop):
+        # Tool chosen on the Tool bar: its diameter sets the stepover distance, its spindle
+        # direction the Left/Right labels.
+        if prop in ("ToolController", "StepOver"):
+            self._showStepover(obj)
+        if prop == "ToolController":
+            self._fillSidewaysCompensation(obj)
+
+    def _spindleClockwise(self, obj):
+        tc = getattr(obj, "ToolController", None)
+        try:
+            return tc.Tool.Proxy.get_spindle_direction().value != "M4"
+        except Exception:
+            return getattr(tc, "SpindleDir", "Forward") != "Reverse"
+
+    def _fillSidewaysCompensation(self, obj):
+        """Left/Right items for FreeCAD's Climb/Conventional. With a clockwise (M3) spindle,
+        keeping the tool to the left of the material-side path (G41-style) is climb milling;
+        a reversed spindle swaps them."""
+        cw = self._spindleClockwise(obj)
+        combo = self.form.cutMode
+        current = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        items = [
+            (translate("CamStudio_Pocket", "Left (climb)") if cw else translate("CamStudio_Pocket", "Left (conventional)"),
+             "Climb" if cw else "Conventional"),
+            (translate("CamStudio_Pocket", "Right (conventional)") if cw else translate("CamStudio_Pocket", "Right (climb)"),
+             "Conventional" if cw else "Climb"),
+        ]
+        for text, data in items:
+            combo.addItem(text, data)
+        index = combo.findData(current if current else obj.CutMode)
+        combo.setCurrentIndex(max(0, index))
+        combo.blockSignals(False)
+
+    def _toolDiameter(self, obj):
+        tc = getattr(obj, "ToolController", None)
+        try:
+            return float(tc.Tool.Diameter.Value)
+        except Exception:
+            return 0.0
+
+    def _showStepover(self, obj):
+        d = self._toolDiameter(obj)
+        _qty_set(self.form.maxStepover, obj.StepOver / 100.0 * d if d > 0 else 0.0)
+        self.form.maxStepover.setEnabled(d > 0)
+        self.form.stepoverInfo.setText(
+            translate("CamStudio_Pocket", "= %d%% of the tool diameter") % obj.StepOver
         )
+
+    def _commitStepover(self, obj):
+        """Distance -> FreeCAD's whole-percent StepOver, only if the user changed it."""
+        widget = self.form.maxStepover
+        value = widget.property("rawValue")
+        if value == widget.property("camStudioLoaded"):
+            return
+        d = self._toolDiameter(obj)
+        if d <= 0:
+            return
+        percent = int(min(100, max(1, round(value / d * 100.0))))
+        if obj.StepOver != percent:
+            obj.StepOver = percent
+        self._showStepover(obj)  # snap the field to what the percent really gives
 
     def getFields(self, obj):
         if obj.CutMode != str(self.form.cutMode.currentData()):
             obj.CutMode = str(self.form.cutMode.currentData())
-        if obj.StepOver != self.form.stepOverPercent.value():
-            obj.StepOver = self.form.stepOverPercent.value()
+        self._commitStepover(obj)
         _qty_commit(obj, "ExtraOffset", self.form.radialStockToLeave)
         _qty_commit(obj, "AxialStockToLeave", self.form.axialStockToLeave)
         if obj.MinTravel != self.form.minTravel.isChecked():
@@ -739,8 +803,9 @@ class PassesPage(_BarPage):
             obj.UseStartPoint = self.form.useStartPoint.isChecked()
 
     def setFields(self, obj):
-        self.selectInComboBox(obj.CutMode, self.form.cutMode)
-        self.form.stepOverPercent.setValue(obj.StepOver)
+        self._fillSidewaysCompensation(obj)
+        self.form.cutMode.setCurrentIndex(max(0, self.form.cutMode.findData(obj.CutMode)))
+        self._showStepover(obj)
         _qty_set(self.form.radialStockToLeave, obj.ExtraOffset.Value)
         _qty_set(self.form.axialStockToLeave, obj.AxialStockToLeave.Value)
         self.form.minTravel.setChecked(obj.MinTravel)
@@ -753,7 +818,7 @@ class PassesPage(_BarPage):
     def getSignalsForUpdate(self, obj):
         return [
             self.form.cutMode.currentIndexChanged,
-            self.form.stepOverPercent.editingFinished,
+            self.form.maxStepover.editingFinished,
             self.form.radialStockToLeave.editingFinished,
             self.form.axialStockToLeave.editingFinished,
             self.form.minTravel.clicked,

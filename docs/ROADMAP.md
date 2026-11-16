@@ -343,10 +343,10 @@ Selected contour(s)) and an **Offset**.
 | Fusion field | Status | Notes |
 |---|---|---|
 | Tolerance | Missing | |
-| Sideways Compensation | Partial | Fusion shows **Left/Right**; we show "Cutting Direction" Climb/Conventional (FreeCAD CutMode). Same idea, different terms |
+| Sideways Compensation | Have | Left/Right, backed by FreeCAD CutMode. With an M3 spindle Left = climb, Right = conventional (verified: climb gives counter-clockwise pocket rings, wall on the tool's right); a reversed spindle swaps the mapping |
 | Minimum Cutting Radius | Missing | |
 | Preserve Order, Both Ways | Missing | |
-| Maximum Stepover | Partial | Fusion takes a **distance** (0.150 in); we take a percent of tool diameter |
+| Maximum Stepover | Have | Entered as a distance, as in Fusion; stored as FreeCAD's whole-percent StepOver (snaps to 1% of tool diameter, shown beside it). Follows the tool on tool change |
 | Use Morphed Spiral Machining, Allow Stepover Cusps | Missing | |
 | Smoothing Deviation | Missing | |
 | **Multiple Depths** (opt-in section) | Partial | We always step down via FreeCAD StepDown on the shared Depths page |
