@@ -79,7 +79,7 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
     """Page controller for CAM Studio's Pocket command (PocketShape.ObjectPocket)."""
 
     def getTitle(self, obj):
-        return translate("CamStudio_Pocket", "Pocket")
+        return translate("CamStudio_Pocket", "2D Offset Roughing")
 
     def getForm(self):
         form = QtWidgets.QWidget()

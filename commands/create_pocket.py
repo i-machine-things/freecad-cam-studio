@@ -27,10 +27,11 @@ _res = PathOpGui.CommandResources(
     objFactory=CamStudioPocket.Create,
     opPageClass=CamStudioPocketPage.TaskPanelOpPage,
     pixmap="CAM_Pocket",
-    menuText=QT_TRANSLATE_NOOP("CamStudio_Pocket", "Pocket"),
+    menuText=QT_TRANSLATE_NOOP("CamStudio_Pocket", "2D Offset Roughing"),
     accelKey=None,
     toolTip=QT_TRANSLATE_NOOP(
-        "CamStudio_Pocket", "Create a 2D Pocket operation in the active Setup"
+        "CamStudio_Pocket",
+        "Create a 2D Offset Roughing (pocket clearing) operation in the active Setup",
     ),
 )
 

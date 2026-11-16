@@ -39,6 +39,6 @@ directory FreeCAD is using, with `Mod` as a subdirectory of it.
 ## Current status
 
 Phase 1 is in progress (see [ROADMAP.md](ROADMAP.md)). Installing today gets you a workbench with
-two working commands: "New Setup" (creates a CAM Job from the selected solid(s)) and "Pocket"
-(creates a 2D Pocket operation, edited through CAM Studio's own Fusion-style dialog rather than
+two working commands: "New Setup" (creates a CAM Job from the selected solid(s)) and "2D Offset Roughing"
+(creates a 2D pocket-clearing operation, edited through CAM Studio's own Fusion-style dialog rather than
 stock CAM's). More operation commands are still to come.

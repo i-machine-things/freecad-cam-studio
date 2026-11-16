@@ -233,9 +233,10 @@ Fusion install (same trust level as observing the live app; field names only, no
 **Have** = built and verified. **Partial** = exists but differs from Fusion in a way that matters.
 **Missing** = not built. This is the checklist for the per-operation completeness gate.
 
-**Open question:** this Fusion build titles the dialog **"2D Offset Roughing"**, not "2D Pocket".
-Need Allan to confirm whether 2D Pocket was renamed, or whether this is a separate operation next
-to it. That decides what our command is called.
+**Naming (confirmed by Allan, 2026-11-15):** current Fusion calls this operation **"2D Offset
+Roughing"**; it is the renamed 2D Pocket, not a separate operation. Our command and dialog title use
+the new name. Internal names (`ops/pocket.py`, `CamStudio_Pocket`, the upstream "Pocket Shape" op
+type) stay as they are.
 
 ### Tool tab
 | Fusion field | Status | Notes |
@@ -291,7 +292,8 @@ Selected contour(s)) and an **Offset**.
 | - Maximum Roughing Stepdown | Partial | = StepDown |
 | - Finishing Stepdowns (count), Finishing Stepdown | Missing | |
 | - Wall Taper Angle | Missing | |
-| - Finish Only at Final Depth, Rough Final, Use Even Stepdowns | Missing | One more row below these was cut off in the screenshot |
+| - Finish Only at Final Depth, Rough Final, Use Even Stepdowns | Missing | |
+| - Order by Depth, Order by Step | Missing | Last two rows of the section (`pocket-passes4.png`) |
 | **Finishing Passes** (opt-in section) | Partial | |
 | - Compensation Type (e.g. In computer) | Missing | **Corrects the earlier note** that this is Contour-only: it is on the pocket's Finishing Passes too |
 | - Number of Finishing Passes, Finish Feedrate | Have | |
