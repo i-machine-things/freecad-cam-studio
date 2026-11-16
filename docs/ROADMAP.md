@@ -11,9 +11,10 @@ Adaptive/Drilling`). This phase is a new Gui layer only — no new toolpath engi
 - [ ] Finish the behavior spec: Face, Pocket, Contour, Adaptive Clearing, Drilling, Setup/Stock/WCS
 - [x] Map each spec'd operation onto FreeCAD's existing CAM-module operation classes (done —
       see ARCHITECTURE.md's class list)
-- [ ] Spike: how an external addon registers a replacement `TaskPanel` for an existing op's
-      edit/double-click behavior (open item in ARCHITECTURE.md) — do this before the tree/dialog
-      work below, it's a risk to the whole approach if it turns out to need core patches
+- [x] Spike: how an external addon registers a replacement `TaskPanel` for an existing op's
+      edit/double-click behavior — resolved, no core patch needed (see ARCHITECTURE.md:
+      `obj.ViewObject.Proxy` is assigned per-instance at creation time, so our own `Command`s
+      just need to create objects with our own `TaskPanelOpPage`/resource bundle)
 - [ ] Build the Setup → Operations tree UI (PySide/Qt) matching the workflow sequence from the spec
 - [ ] Parameter dialogs for the Phase 1 operation set, backed by the existing `Path.Op.*` objects'
       own properties (no new property schema)
