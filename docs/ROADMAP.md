@@ -346,7 +346,7 @@ Selected contour(s)) and an **Offset**.
 | Sideways Compensation | Have | Left/Right, backed by FreeCAD CutMode. With an M3 spindle Left = climb, Right = conventional (verified: climb gives counter-clockwise pocket rings, wall on the tool's right); a reversed spindle swaps the mapping |
 | Minimum Cutting Radius | Missing | |
 | Preserve Order, Both Ways | Missing | |
-| Maximum Stepover | Have | Entered as a distance, as in Fusion; stored as FreeCAD's whole-percent StepOver (snaps to 1% of tool diameter, shown beside it). Follows the tool on tool change |
+| Maximum Stepover | Have | Distance, as in Fusion, plus a linked editable **Stepover (% of tool)** field right below it (Allan wants both). Stored as FreeCAD's whole-percent StepOver, so the distance snaps to 1% of tool diameter. Follows the tool on tool change |
 | Use Morphed Spiral Machining, Allow Stepover Cusps | Missing | |
 | Smoothing Deviation | Missing | |
 | **Multiple Depths** (opt-in section) | Have | Section on the Passes bar with its own on/off (off = one pass at the bottom). Levels computed by `ops/pocket.py` `depthLevels` and handed to upstream's `depth_params` via its `user_depths` argument |

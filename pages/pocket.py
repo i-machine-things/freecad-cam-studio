@@ -625,7 +625,12 @@ class PassesPage(_BarPage):
         # Fusion's "Maximum Stepover" is a distance. FreeCAD stores StepOver as a whole
         # percent of the tool diameter, so the distance is converted (and snaps to 1%).
         form.maxStepover = _quantity_spinbox()
-        form.stepoverInfo = QtWidgets.QLabel()
+        form.stepOverPercent = QtWidgets.QSpinBox()
+        form.stepOverPercent.setRange(1, 100)
+        form.stepOverPercent.setSuffix(" %")
+        form.stepOverPercent.setToolTip(
+            translate("CamStudio_Pocket", "Stepover as a percent of the tool diameter (linked to Maximum Stepover)")
+        )
         form.radialStockToLeave = _quantity_spinbox()
         form.axialStockToLeave = _quantity_spinbox()
         form.minTravel = QtWidgets.QCheckBox(
@@ -652,7 +657,7 @@ class PassesPage(_BarPage):
         form.finishFeedrate.setSuffix(" " + feedUnit)
         passes_layout.addRow(translate("CamStudio_Pocket", "Sideways Compensation"), form.cutMode)
         passes_layout.addRow(translate("CamStudio_Pocket", "Maximum Stepover"), form.maxStepover)
-        passes_layout.addRow("", form.stepoverInfo)
+        passes_layout.addRow(translate("CamStudio_Pocket", "Stepover (% of tool)"), form.stepOverPercent)
         passes_layout.addRow(
             translate("CamStudio_Pocket", "Radial Stock to Leave"), form.radialStockToLeave
         )
@@ -796,23 +801,28 @@ class PassesPage(_BarPage):
         d = self._toolDiameter(obj)
         _qty_set(self.form.maxStepover, obj.StepOver / 100.0 * d if d > 0 else 0.0)
         self.form.maxStepover.setEnabled(d > 0)
-        self.form.stepoverInfo.setText(
-            translate("CamStudio_Pocket", "= %d%% of the tool diameter") % obj.StepOver
-        )
+        self.form.stepOverPercent.blockSignals(True)
+        self.form.stepOverPercent.setValue(obj.StepOver)
+        self.form.stepOverPercent.blockSignals(False)
+        self.form.stepOverPercent.setProperty("camStudioLoaded", obj.StepOver)
 
     def _commitStepover(self, obj):
-        """Distance -> FreeCAD's whole-percent StepOver, only if the user changed it."""
-        widget = self.form.maxStepover
-        value = widget.property("rawValue")
-        if value == widget.property("camStudioLoaded"):
+        """FreeCAD's whole-percent StepOver from whichever of the two linked fields the
+        user changed (percent wins if both did), then show both in step again."""
+        percentBox = self.form.stepOverPercent
+        distance = self.form.maxStepover
+        percent = None
+        if percentBox.value() != percentBox.property("camStudioLoaded"):
+            percent = percentBox.value()
+        elif distance.property("rawValue") != distance.property("camStudioLoaded"):
+            d = self._toolDiameter(obj)
+            if d > 0:
+                percent = int(min(100, max(1, round(distance.property("rawValue") / d * 100.0))))
+        if percent is None:
             return
-        d = self._toolDiameter(obj)
-        if d <= 0:
-            return
-        percent = int(min(100, max(1, round(value / d * 100.0))))
         if obj.StepOver != percent:
             obj.StepOver = percent
-        self._showStepover(obj)  # snap the field to what the percent really gives
+        self._showStepover(obj)  # snap the distance to what the percent really gives
 
     def getFields(self, obj):
         if obj.CutMode != str(self.form.cutMode.currentData()):
@@ -868,6 +878,7 @@ class PassesPage(_BarPage):
         return [
             self.form.cutMode.currentIndexChanged,
             self.form.maxStepover.editingFinished,
+            self.form.stepOverPercent.editingFinished,
             self.form.useMultipleDepths.clicked,
             self.form.useEvenStepdowns.clicked,
             self.form.finishingStepdowns.editingFinished,
