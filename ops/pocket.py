@@ -771,28 +771,42 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         # The tool has to be over the approach point *before* it starts descending, so every
         # rapid that positions it over the old plunge point has to move with it -- not just
         # the command right before the plunge. Stock output is e.g. `G0 X Y` (at clearance)
-        # then `G0 X Y Z<safe>` then the plunge; a post-processed or hand-built path may
-        # instead omit modal X/Y on the descent (`G0 X Y`, `G0 Z<safe>`). Walk back over the
-        # whole run of rapids ending on the plunge point and retarget each one that carries
-        # X/Y; Z-only ones need no change. Stop at the first move that goes anywhere else.
+        # then `G0 X Y Z<safe>` then the plunge; other paths omit modal axes (`G0 X Y`,
+        # `G0 Z<safe>`) or split them (`G0 X.. Z..`, `G0 Y..`). So work from each command's
+        # *resolved* position, never from which axes it happens to spell out: walk back over
+        # the run of rapids that leave the tool over the plunge point and retarget each one
+        # that carries X or Y. Stop at the first command that ends anywhere else.
+        resolved = []
+        x = y = z = None
+        for cmd in cmds[:plungeIdx]:
+            params = cmd.Parameters
+            x, y, z = params.get("X", x), params.get("Y", y), params.get("Z", z)
+            resolved.append((x, y, z))
         posIdxs = []
         for i in range(plungeIdx - 1, -1, -1):
-            cmd = cmds[i]
-            if cmd.Name not in ("G0", "G00"):
-                break
-            params = cmd.Parameters
-            if "X" not in params and "Y" not in params:
-                continue
+            rx, ry, _rz = resolved[i]
             if (
-                abs(params.get("X", start.x) - start.x) > 1e-6
-                or abs(params.get("Y", start.y) - start.y) > 1e-6
+                cmds[i].Name not in ("G0", "G00")
+                or rx is None
+                or ry is None
+                or abs(rx - start.x) > 1e-6
+                or abs(ry - start.y) > 1e-6
             ):
                 break
-            posIdxs.append(i)
+            if "X" in cmds[i].Parameters or "Y" in cmds[i].Parameters:
+                posIdxs.append(i)
         # Nothing to retarget means the tool reaches the plunge point some other way (e.g. a
         # feed move) -- not a layout this was designed or verified for, so decline instead
         # of leaving a diagonal descent.
         if not posIdxs:
+            return None
+        # The earliest retargeted rapid is the one that actually travels sideways to the new
+        # point. If it also loses height, moving its target would turn it into a descent
+        # along a line nobody checked -- decline. (Later ones start and end over the
+        # approach point, so they stay vertical.)
+        first = posIdxs[-1]
+        prevZ = resolved[first - 1][2] if first > 0 else None
+        if prevZ is not None and resolved[first][2] is not None and resolved[first][2] < prevZ - 1e-6:
             return None
 
         newCmds = list(cmds)
