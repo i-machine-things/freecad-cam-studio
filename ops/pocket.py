@@ -339,18 +339,62 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             obj.FinalDepth = original
 
     def loadFeedsFromTool(self, obj):
-        """Copy the tool controller's spindle speed and feeds into this op's own Feed &
-        Speed properties (Fusion fills an operation from the tool's preset the same way)."""
+        """Fill this op's own Feed & Speed from its defaults: the setup's stock material
+        when it has one (materials/library.py: spindle speed from the material's surface
+        speed for this tool's material and diameter; feeds from the chipload -- the tool's
+        own, else the material's table), otherwise the tool controller's values. Fusion
+        fills an operation from the tool's preset for the material the same way.
+
+        Whatever the material can't supply (e.g. no chipload known) stays at the tool
+        controller's value."""
         tc = getattr(obj, "ToolController", None)
         if tc is None:
             return
-        obj.SpindleSpeed = tc.SpindleSpeed
-        obj.RampSpindleSpeed = tc.SpindleSpeed
-        obj.CuttingFeedrate = tc.HorizFeed.Value
-        obj.LeadInFeedrate = tc.HorizFeed.Value
-        obj.LeadOutFeedrate = tc.HorizFeed.Value
-        obj.RampFeedrate = tc.VertFeed.Value
-        obj.PlungeFeedrate = tc.VertFeed.Value
+        rpm, horiz, vert = tc.SpindleSpeed, tc.HorizFeed.Value, tc.VertFeed.Value
+        defaults = self.materialDefaults(obj)
+        if defaults is not None:
+            rpm = defaults["rpm"]
+            if "cutting" in defaults:
+                horiz = defaults["cutting"] / 60.0
+                vert = defaults["plunge"] / 60.0
+        obj.SpindleSpeed = round(rpm)
+        obj.RampSpindleSpeed = round(rpm)
+        obj.CuttingFeedrate = horiz
+        obj.LeadInFeedrate = horiz
+        obj.LeadOutFeedrate = horiz
+        obj.RampFeedrate = vert
+        obj.PlungeFeedrate = vert
+
+    loadDefaultFeeds = loadFeedsFromTool
+
+    def materialDefaults(self, obj):
+        """materials.library.defaultFeeds for this op's tool in its setup's stock material,
+        or None (no material set, unknown material, or no surface speed for it)."""
+        import PathScripts.PathUtils as PathUtils
+        from materials import library
+
+        job = PathUtils.findParentJob(obj)
+        name = getattr(job, "StockMaterial", "") if job is not None else ""
+        tc = getattr(obj, "ToolController", None)
+        if not name or tc is None:
+            return None
+        material = library.find(name)
+        if material is None:
+            Path.Log.warning(
+                "%s: stock material '%s' is not in the material library; using the tool "
+                "controller's feeds and speeds.\n" % (obj.Label, name)
+            )
+            return None
+        tool = tc.Tool
+        chip = getattr(tool, "Chipload", 0)
+        chip = getattr(chip, "Value", chip) or 0.0
+        return library.defaultFeeds(
+            material,
+            library.toolMaterial(tool),
+            tool.Diameter.Value,
+            int(getattr(tool, "Flutes", 0) or 0),
+            float(chip),
+        )
 
     def opExecute(self, obj, *args, **kwargs):
         # Base.execute has just read the tool controller's feeds into self.horizFeed /

@@ -44,7 +44,13 @@ class CommandCreateJob:
         # project's UI scope (only operation TaskPanels are, per docs/ROADMAP.md) -- the
         # created Job keeps stock CAM's own sensible default stock, editable later the
         # normal way (double-click the Stock item), same as in stock CAM itself.
-        PathJobGui.Create(selection, None, openTaskPanel=False)
+        job = PathJobGui.Create(selection, None, openTaskPanel=False)
+        if job is not None:
+            # Fusion opens the Setup dialog as soon as a setup is created; CAM Studio's
+            # (pages/setup.py) is where the stock material is picked.
+            from pages.setup import openSetup
+
+            openSetup(job)
 
 
 Gui.addCommand("CamStudio_CreateJob", CommandCreateJob())

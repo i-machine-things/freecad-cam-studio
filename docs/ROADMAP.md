@@ -353,6 +353,25 @@ restore.
   FreeCAD options. Keep them, under Other Options. (Pocket Pattern and Zig-Zag Angle: removed.)
 - **Chip Thinning** isn't visible in any of these captures. Still blocked on Allan.
 
+## Stock material library (built 2026-11-15)
+Allan's request: a material library, picked per setup, driving default feeds and speeds.
+- **Library** (`materials/library.py`): per material, a surface speed for HSS and for carbide
+  tools (m/min) and a chipload table per tool material (feed per tooth vs tool diameter,
+  interpolated). Seeded from the FeedsAndSpeeds addon's 15 CC-BY material cards (surface
+  speeds only; credited in `materials/ATTRIBUTION.md`). Chipload tables ship empty for Allan
+  to fill. Edits save to the user's FreeCAD data folder, never the shipped file.
+- **Defaults** for an operation, from standard formulas: rpm = 1000·Vc/(π·D), **no spindle cap**
+  (Allan's choice); chipload = the tool's own Chipload if set, else the material's table;
+  cutting (and lead-in/out) = fz·flutes·rpm; plunge (and ramp) = fz·rpm. Applied when an op is
+  created or its tool changes; anything the material can't supply stays at the tool
+  controller's value.
+- **Setup dialog** (`pages/setup.py`, Allan chose our own over a Job property): opens after
+  New Setup and from **Edit Setup**. Setup bar (name, models) and Stock bar (Stock Material,
+  summary, Edit Material Library, optional reset of existing ops). Stored as a
+  `StockMaterial` string on the Job.
+- **Not built yet in the Setup dialog**: WCS/orientation, stock size and shape, post-processor
+  settings (button to FreeCAD's Job editor for now), and Fusion's other Setup fields.
+
 ## Phase 2 — 3D operations
 Parallel, Scallop, and other surface-finishing strategies. Spec and implement once Phase 1's UI
 scaffolding exists, since these mostly add new operation types to the same tree/dialog structure.
