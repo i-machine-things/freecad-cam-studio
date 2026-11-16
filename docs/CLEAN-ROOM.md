@@ -42,8 +42,9 @@ no binary was involved and no copyrighted text was lifted verbatim.
 
 ## Scope boundary for contributors
 
-If you're writing or reviewing a spec doc: anything sourced from "I opened Fusion and tried it"
-on your own licensed copy is fine to describe in your own words (this is still clean-room —
-observing a program you're licensed to run is not reverse engineering it), but do not paste
-Autodesk's own help text verbatim, and do not attach screenshots containing Autodesk-owned
-icon/logo assets to this repo.
+If you're writing or reviewing a spec doc: describing what you saw while using your own licensed
+copy of Fusion ("I opened Fusion and tried it") is ordinary use of the program, described in your
+own words -- no decompiling, disassembling, debugging, or extracting files. **The license terms
+that apply to your copy govern what you may do with it; check them, and if they restrict
+something, don't do it.** Never paste Autodesk's own help text verbatim, and do not attach
+screenshots containing Autodesk-owned icon/logo assets to this repo.

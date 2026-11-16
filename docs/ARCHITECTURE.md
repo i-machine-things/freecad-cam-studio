@@ -36,12 +36,15 @@ are what this project replaces, and nothing else.
 
 - **No FreeCAD recompilation.** Everything above is pure Python (the native C++ parts — `Area`,
   the TSP solver, Voronoi — sit underneath `Path.Op.*` and are called by it; this project never
-  touches them directly). An addon means no multi-hour C++ build pipeline, unlike
-  [[project_freecad_fork]] territory (Allan's existing fork, where FreeCAD-core changes do need a
-  real recompile/Flatpak build) — not needed for this UI-layer project.
-- **File-format compatible with stock CAM.** This workbench creates/edits the exact same
-  `Path::FeaturePython` objects stock CAM would. A document made in this workbench opens fine in
-  vanilla FreeCAD CAM, and vice versa — we're not inventing a parallel data model.
+  touches them directly). An addon means no multi-hour C++ build pipeline, unlike changes to
+  Allan's separate `i-machine-things/FreeCAD` fork (where FreeCAD-core changes do need a real
+  recompile/Flatpak build) — not needed for this UI-layer project.
+- **File-format compatible with stock CAM.** This workbench creates the same
+  `Path::FeaturePython` objects stock CAM would, so a document made in this workbench opens in
+  vanilla FreeCAD CAM, and vice versa — we're not inventing a parallel data model. **Limit:**
+  operations created by this workbench point at the addon's own modules (their data proxy and
+  their edit page), so editing or recomputing one of *those* operations requires the addon
+  installed; vanilla FreeCAD can't import those modules.
 - **Installable via FreeCAD's Addon Manager** like any other community workbench, once published.
 - **Upstream CAM improvements (bug fixes, new ops) are inherited for free** — this project only
   ever adds a new Gui layer alongside the existing one, never patches `Path/Op/*.py` or
