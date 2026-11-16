@@ -170,6 +170,34 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             if not hasattr(obj, name):
                 obj.addProperty(ptype, name, "Feed & Speed", QT_TRANSLATE_NOOP("App::Property", doc))
                 added = True
+        # Fusion's Multiple Depths options (see depthLevels). Separate from the feeds above.
+        if not hasattr(obj, "UseMultipleDepths"):
+            obj.addProperty(
+                "App::PropertyBool", "UseMultipleDepths", "Depth",
+                QT_TRANSLATE_NOOP("App::Property", "Cut in several depth levels. Off: one pass at the bottom"),
+            )
+            obj.UseMultipleDepths = True
+        if not hasattr(obj, "UseEvenStepdowns"):
+            obj.addProperty(
+                "App::PropertyBool", "UseEvenStepdowns", "Depth",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Space the roughing levels evenly, each at most the Step Down, instead of "
+                    "full steps plus a thinner last one",
+                ),
+            )
+            obj.UseEvenStepdowns = True  # Fusion's default
+        if not hasattr(obj, "FinishingStepdowns"):
+            obj.addProperty(
+                "App::PropertyInteger", "FinishingStepdowns", "Depth",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Number of finishing levels at the bottom, each Finish Depth deep. 0 = none",
+                ),
+            )
+            # Keep an existing op's toolpath: FreeCAD's own Finish Depth meant one finishing level.
+            finish = getattr(obj, "FinishDepth", None)
+            obj.FinishingStepdowns = 1 if finish is not None and finish.Value > 0 else 0
         if not hasattr(obj, "ChipThinning"):
             # Separate from the feeds above: adding it to an older document must not count as
             # "feeds missing" and re-seed feeds the user already set.
@@ -327,7 +355,79 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
     def _customDepthParams(self, obj, strDep, finDep):
         axial = getattr(obj, "AxialStockToLeave", None)
         adjustedFinalDepth = finDep + (axial.Value if axial else 0.0)
-        return super()._customDepthParams(obj, strDep, adjustedFinalDepth)
+        if not hasattr(obj, "UseMultipleDepths"):
+            return super()._customDepthParams(obj, strDep, adjustedFinalDepth)
+        import PathScripts.PathUtils as PathUtils
+
+        # Same helper upstream uses, given the levels explicitly (its documented user_depths
+        # argument) so Fusion's Multiple Depths options can shape them.
+        levels = self.depthLevels(
+            strDep,
+            adjustedFinalDepth,
+            obj.StepDown.Value,
+            int(getattr(obj, "FinishingStepdowns", 0)),
+            obj.FinishDepth.Value if hasattr(obj, "FinishDepth") else 0.0,
+            bool(obj.UseEvenStepdowns),
+            bool(obj.UseMultipleDepths),
+        )
+        return PathUtils.depth_params(
+            clearance_height=obj.ClearanceHeight.Value,
+            safe_height=obj.SafeHeight.Value,
+            start_depth=strDep,
+            step_down=obj.StepDown.Value,
+            z_finish_step=0.0,
+            final_depth=adjustedFinalDepth,
+            user_depths=levels,
+        )
+
+    @staticmethod
+    def depthLevels(start, final, maxStep, finishCount, finishSize, even, multiple):
+        """Cutting levels, top to bottom, ending at `final` (Fusion's Multiple Depths):
+
+        - multiple off: one level, the bottom.
+        - finishing: the last `finishCount` levels are `finishSize` apart (each takes that
+          much off the floor). They fill at most the whole depth.
+        - roughing: from `start` down to the top of the finishing zone in steps of at most
+          `maxStep` -- evenly spaced if `even`, else full steps from the top with a thinner
+          last one (FreeCAD's own behavior).
+        """
+        eps = 1e-9
+        total = start - final
+        if total <= eps:
+            return [final]
+        if not multiple:
+            return [final]
+        levels = []
+        finishCount = max(0, int(finishCount))
+        finishSize = max(0.0, float(finishSize))
+        if finishCount and finishSize > eps:
+            finishCount = min(finishCount, int(math.floor(total / finishSize + eps)) or 1)
+            finishTop = final + finishCount * finishSize
+        else:
+            finishCount, finishTop = 0, final
+        maxStep = abs(maxStep)
+        roughDepth = start - finishTop
+        if roughDepth > eps:
+            if maxStep <= eps:
+                rough = [finishTop]
+            elif even:
+                n = int(math.ceil(roughDepth / maxStep - eps))
+                rough = [start - roughDepth * i / n for i in range(1, n + 1)]
+            else:
+                rough, z = [], start
+                while z - maxStep > finishTop + eps:
+                    z -= maxStep
+                    rough.append(z)
+                rough.append(finishTop)
+            levels += rough
+        levels += [finishTop - finishSize * i for i in range(1, finishCount + 1)]
+        # Clean up rounding: strictly descending, last exactly at the bottom.
+        out = []
+        for z in levels:
+            if not out or z < out[-1] - 1e-7:
+                out.append(z)
+        out[-1] = final
+        return out
 
     def areaOpShapes(self, obj):
         # _customDepthParams (above) only adjusts the Z-level *iteration list* used to slice

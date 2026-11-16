@@ -349,11 +349,12 @@ Selected contour(s)) and an **Offset**.
 | Maximum Stepover | Have | Entered as a distance, as in Fusion; stored as FreeCAD's whole-percent StepOver (snaps to 1% of tool diameter, shown beside it). Follows the tool on tool change |
 | Use Morphed Spiral Machining, Allow Stepover Cusps | Missing | |
 | Smoothing Deviation | Missing | |
-| **Multiple Depths** (opt-in section) | Partial | We always step down via FreeCAD StepDown on the shared Depths page |
+| **Multiple Depths** (opt-in section) | Have | Section on the Passes bar with its own on/off (off = one pass at the bottom). Levels computed by `ops/pocket.py` `depthLevels` and handed to upstream's `depth_params` via its `user_depths` argument |
 | - Maximum Roughing Stepdown | Partial | = StepDown |
-| - Finishing Stepdowns (count), Finishing Stepdown | Missing | |
+| - Finishing Stepdowns (count), Finishing Stepdown | Have | Count is CAM Studio's; size is FreeCAD's Finish Depth. Older ops with a Finish Depth get a count of 1, keeping their toolpath |
 | - Wall Taper Angle | Missing | |
-| - Finish Only at Final Depth, Rough Final, Use Even Stepdowns | Missing | |
+| - Use Even Stepdowns | Have | On by default, as in Fusion: roughing levels evenly spaced at or under the max stepdown (FreeCAD's own stepping is full steps plus a thinner last one) |
+| - Finish Only at Final Depth, Rough Final | Missing | Tied to how finishing passes run per level; ours rerun the whole pattern (see finishing passes) |
 | - Order by Depth, Order by Step | Missing | Last two rows of the section (`pocket-passes4.png`) |
 | **Finishing Passes** (opt-in section) | Partial | |
 | - Compensation Type (e.g. In computer) | Missing | **Corrects the earlier note** that this is Contour-only: it is on the pocket's Finishing Passes too |

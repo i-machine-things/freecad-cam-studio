@@ -686,6 +686,25 @@ class PassesPage(_BarPage):
         options_group.setContentLayout(options_layout)
         layout.addWidget(options_group)
 
+        form.useMultipleDepths = QtWidgets.QCheckBox(translate("CamStudio_Pocket", "Multiple Depths"))
+        form.useMultipleDepths.setToolTip(
+            translate("CamStudio_Pocket", "Cut in several depth levels. Off: a single pass at the bottom.")
+        )
+        form.finishingStepdowns = QtWidgets.QSpinBox()
+        form.finishingStepdowns.setRange(0, 50)
+        form.finishingStepdowns.setToolTip(
+            translate("CamStudio_Pocket", "Finishing levels at the bottom, each Finishing Stepdown deep. 0 = none.")
+        )
+        form.useEvenStepdowns = QtWidgets.QCheckBox(translate("CamStudio_Pocket", "Use Even Stepdowns"))
+        form.useEvenStepdowns.setToolTip(
+            translate(
+                "CamStudio_Pocket",
+                "Space the roughing levels evenly, each at most the Maximum Roughing Stepdown, "
+                "instead of full steps plus a thinner last one.",
+            )
+        )
+        form.useMultipleDepths.clicked.connect(lambda *_: self._updateDepthEnabled(self.obj))
+        form.finishingStepdowns.valueChanged.connect(lambda *_: self._updateDepthEnabled(self.obj))
         # Filled in by addDepthRows once the panel hands over FreeCAD's depth fields.
         form.depthsGroup = CollapsibleSection(translate("CamStudio_Pocket", "Multiple Depths"))
         form.depthsLayout = QtWidgets.QFormLayout()
@@ -697,16 +716,34 @@ class PassesPage(_BarPage):
         return form
 
     def addDepthRows(self, depthsForm):
-        """Show FreeCAD's Step Down / Finish Step Down fields (still driven by FreeCAD's
-        Depths page logic, see HeightsBar) here, under Fusion's names."""
-        for label, name in (
-            (translate("CamStudio_Pocket", "Maximum Roughing Stepdown"), "stepDown"),
-            (translate("CamStudio_Pocket", "Finishing Stepdown"), "finishDepth"),
-        ):
-            widget = getattr(depthsForm, name, None)
-            if widget is not None and not widget.isHidden():
-                self.form.depthsLayout.addRow(label, widget)
-                self.form.depthsGroup.show()
+        """Fusion's Multiple Depths section. FreeCAD's Step Down / Finish Step Down fields
+        (still driven by FreeCAD's Depths page logic, see HeightsBar) appear here under
+        Fusion's names, between CAM Studio's own options (ops/pocket.py depthLevels)."""
+        f = self.form
+        stepDown = getattr(depthsForm, "stepDown", None)
+        finishDepth = getattr(depthsForm, "finishDepth", None)
+        self.depthWidgets = [w for w in (stepDown, finishDepth) if w is not None and not w.isHidden()]
+        f.depthsLayout.addRow(f.useMultipleDepths)
+        if stepDown in self.depthWidgets:
+            f.depthsLayout.addRow(translate("CamStudio_Pocket", "Maximum Roughing Stepdown"), stepDown)
+        f.depthsLayout.addRow(translate("CamStudio_Pocket", "Finishing Stepdowns"), f.finishingStepdowns)
+        if finishDepth in self.depthWidgets:
+            f.depthsLayout.addRow(translate("CamStudio_Pocket", "Finishing Stepdown"), finishDepth)
+        f.depthsLayout.addRow(f.useEvenStepdowns)
+        self.finishDepthWidget = finishDepth
+        f.depthsGroup.show()
+        self._updateDepthEnabled(self.obj)
+
+    def _updateDepthEnabled(self, obj):
+        f = self.form
+        multiple = f.useMultipleDepths.isChecked()
+        for w in getattr(self, "depthWidgets", []):
+            w.setEnabled(multiple)
+        f.finishingStepdowns.setEnabled(multiple)
+        f.useEvenStepdowns.setEnabled(multiple)
+        fd = getattr(self, "finishDepthWidget", None)
+        if fd is not None:
+            fd.setEnabled(multiple and f.finishingStepdowns.value() > 0)
 
     def initBar(self, obj):
         self.setIcon(":/icons/CAM_Pocket.svg")
@@ -781,6 +818,13 @@ class PassesPage(_BarPage):
         if obj.CutMode != str(self.form.cutMode.currentData()):
             obj.CutMode = str(self.form.cutMode.currentData())
         self._commitStepover(obj)
+        if hasattr(obj, "UseMultipleDepths"):
+            for prop, widget in (("UseMultipleDepths", self.form.useMultipleDepths),
+                                 ("UseEvenStepdowns", self.form.useEvenStepdowns)):
+                if getattr(obj, prop) != widget.isChecked():
+                    setattr(obj, prop, widget.isChecked())
+            if obj.FinishingStepdowns != self.form.finishingStepdowns.value():
+                obj.FinishingStepdowns = self.form.finishingStepdowns.value()
         _qty_commit(obj, "ExtraOffset", self.form.radialStockToLeave)
         _qty_commit(obj, "AxialStockToLeave", self.form.axialStockToLeave)
         if obj.MinTravel != self.form.minTravel.isChecked():
@@ -806,6 +850,11 @@ class PassesPage(_BarPage):
         self._fillSidewaysCompensation(obj)
         self.form.cutMode.setCurrentIndex(max(0, self.form.cutMode.findData(obj.CutMode)))
         self._showStepover(obj)
+        if hasattr(obj, "UseMultipleDepths"):
+            self.form.useMultipleDepths.setChecked(obj.UseMultipleDepths)
+            self.form.useEvenStepdowns.setChecked(obj.UseEvenStepdowns)
+            self.form.finishingStepdowns.setValue(obj.FinishingStepdowns)
+            self._updateDepthEnabled(obj)
         _qty_set(self.form.radialStockToLeave, obj.ExtraOffset.Value)
         _qty_set(self.form.axialStockToLeave, obj.AxialStockToLeave.Value)
         self.form.minTravel.setChecked(obj.MinTravel)
@@ -819,6 +868,9 @@ class PassesPage(_BarPage):
         return [
             self.form.cutMode.currentIndexChanged,
             self.form.maxStepover.editingFinished,
+            self.form.useMultipleDepths.clicked,
+            self.form.useEvenStepdowns.clicked,
+            self.form.finishingStepdowns.editingFinished,
             self.form.radialStockToLeave.editingFinished,
             self.form.axialStockToLeave.editingFinished,
             self.form.minTravel.clicked,
