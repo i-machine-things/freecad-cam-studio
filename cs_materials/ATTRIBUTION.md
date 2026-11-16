@@ -8,5 +8,7 @@ come from the material cards of the **FreeCAD Feeds and Speeds** addon
 > https://creativecommons.org/licenses/by/3.0/
 
 Changes made here: converted from FCMat cards to JSON; kept only name, category ("Father")
-and the two surface speeds; added empty per-diameter chipload tables. No code from that
+and the two surface speeds. On request (CAM Studio menu > Add Feeds & Speeds Materials) they
+are written back out as FreeCAD material files in the user's library, with this credit in
+each file's Author/License fields. No code from that
 addon (LGPL-2.1) is included in this project.

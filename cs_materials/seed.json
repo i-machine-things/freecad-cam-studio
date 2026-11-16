@@ -1,5 +1,5 @@
 {
-  "_about": "CAM Studio stock material library (shipped defaults). Surface speeds are in m/min. Chipload tables are [tool diameter mm, feed per tooth mm] pairs, empty until filled in. Surface speeds and material names: FreeCAD Feeds and Speeds addon material cards, (c) 2022 Daniel Wood, CC-BY 3.0 -- see ATTRIBUTION.md.",
+  "_about": "Material names, categories and HSS/carbide surface speeds (m/min) from the FreeCAD Feeds and Speeds addon's material cards, (c) 2022 Daniel Wood, CC-BY 3.0 -- see ATTRIBUTION.md. Not used directly: CAM Studio > Add Feeds & Speeds Materials writes them into FreeCAD's User material library as normal FreeCAD materials.",
   "version": 1,
   "materials": [
     {
@@ -8,10 +8,6 @@
       "surfaceSpeed": {
         "HSS": 175.0,
         "Carbide": 395.0
-      },
-      "chipload": {
-        "HSS": [],
-        "Carbide": []
       }
     },
     {
@@ -20,10 +16,6 @@
       "surfaceSpeed": {
         "HSS": 175.0,
         "Carbide": 395.0
-      },
-      "chipload": {
-        "HSS": [],
-        "Carbide": []
       }
     },
     {
@@ -32,10 +24,6 @@
       "surfaceSpeed": {
         "HSS": 175.0,
         "Carbide": 395.0
-      },
-      "chipload": {
-        "HSS": [],
-        "Carbide": []
       }
     },
     {
@@ -44,10 +32,6 @@
       "surfaceSpeed": {
         "HSS": 200.0,
         "Carbide": 395.0
-      },
-      "chipload": {
-        "HSS": [],
-        "Carbide": []
       }
     },
     {
@@ -56,10 +40,6 @@
       "surfaceSpeed": {
         "HSS": 175.0,
         "Carbide": 350.0
-      },
-      "chipload": {
-        "HSS": [],
-        "Carbide": []
       }
     },
     {
@@ -68,10 +48,6 @@
       "surfaceSpeed": {
         "HSS": 125.0,
         "Carbide": 300.0
-      },
-      "chipload": {
-        "HSS": [],
-        "Carbide": []
       }
     },
     {
@@ -80,10 +56,6 @@
       "surfaceSpeed": {
         "HSS": 35.0,
         "Carbide": 120.0
-      },
-      "chipload": {
-        "HSS": [],
-        "Carbide": []
       }
     },
     {
@@ -92,10 +64,6 @@
       "surfaceSpeed": {
         "HSS": 225.0,
         "Carbide": 275.0
-      },
-      "chipload": {
-        "HSS": [],
-        "Carbide": []
       }
     },
     {
@@ -104,10 +72,6 @@
       "surfaceSpeed": {
         "HSS": 145.0,
         "Carbide": 275.0
-      },
-      "chipload": {
-        "HSS": [],
-        "Carbide": []
       }
     },
     {
@@ -116,10 +80,6 @@
       "surfaceSpeed": {
         "HSS": 225.0,
         "Carbide": 255.0
-      },
-      "chipload": {
-        "HSS": [],
-        "Carbide": []
       }
     },
     {
@@ -128,10 +88,6 @@
       "surfaceSpeed": {
         "HSS": 225.0,
         "Carbide": 255.0
-      },
-      "chipload": {
-        "HSS": [],
-        "Carbide": []
       }
     },
     {
@@ -140,10 +96,6 @@
       "surfaceSpeed": {
         "HSS": 25.0,
         "Carbide": 85.0
-      },
-      "chipload": {
-        "HSS": [],
-        "Carbide": []
       }
     },
     {
@@ -152,10 +104,6 @@
       "surfaceSpeed": {
         "HSS": 10.0,
         "Carbide": 37.5
-      },
-      "chipload": {
-        "HSS": [],
-        "Carbide": []
       }
     },
     {
@@ -164,10 +112,6 @@
       "surfaceSpeed": {
         "HSS": 7.5,
         "Carbide": 25.0
-      },
-      "chipload": {
-        "HSS": [],
-        "Carbide": []
       }
     },
     {
@@ -176,10 +120,6 @@
       "surfaceSpeed": {
         "HSS": 12.0,
         "Carbide": 45.0
-      },
-      "chipload": {
-        "HSS": [],
-        "Carbide": []
       }
     }
   ]

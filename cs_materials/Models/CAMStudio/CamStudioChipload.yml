@@ -1,0 +1,48 @@
+---
+# SPDX-License-Identifier: MIT
+# CAM Studio material model: chipload (feed per tooth) against tool diameter.
+# Registered with FreeCAD's material system by Init.py (Material module "ModuleModelDir"),
+# so FreeCAD's own material editor shows and edits it. Materials carrying it stay normal
+# FreeCAD materials: without CAM Studio these properties are simply not shown.
+Model:
+  Name: 'CAM Studio Chipload'
+  UUID: '9c492684-3b61-4aa9-a529-604747cff89d'
+  URL: 'https://en.wikipedia.org/wiki/Speeds_and_feeds#Feed_rate'
+  Description: >-
+    Feed per tooth (chipload) against tool diameter, for HSS and carbide end mills.
+    Interpolated linearly between rows and held flat beyond the first and last rows.
+    Used by CAM Studio, with the Machinability model's surface speeds, for default
+    feeds and speeds.
+  DOI: ""
+  ChiploadHSS:
+    DisplayName: "Chipload (HSS)"
+    Type: '2DArray'
+    Columns:
+      ToolDiameter:
+        Type: 'Quantity'
+        Units: 'mm'
+        URL: ''
+        Description: "Tool diameter"
+      FeedPerTooth:
+        Type: 'Quantity'
+        Units: 'mm'
+        URL: ''
+        Description: "Feed per tooth at that diameter"
+    URL: ''
+    Description: "Chipload table for HSS tools"
+  ChiploadCarbide:
+    DisplayName: "Chipload (Carbide)"
+    Type: '2DArray'
+    Columns:
+      ToolDiameter:
+        Type: 'Quantity'
+        Units: 'mm'
+        URL: ''
+        Description: "Tool diameter"
+      FeedPerTooth:
+        Type: 'Quantity'
+        Units: 'mm'
+        URL: ''
+        Description: "Feed per tooth at that diameter"
+    URL: ''
+    Description: "Chipload table for carbide tools"

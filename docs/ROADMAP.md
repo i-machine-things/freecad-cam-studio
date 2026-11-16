@@ -353,27 +353,29 @@ restore.
   FreeCAD options. Keep them, under Other Options. (Pocket Pattern and Zig-Zag Angle: removed.)
 - **Chip Thinning** isn't visible in any of these captures. Still blocked on Allan.
 
-## Stock material library (built 2026-11-15)
-Allan's request: a material library, picked per setup, driving default feeds and speeds.
-- **Library** (`materials/library.py`): per material, a surface speed for HSS and for carbide
-  tools (m/min) and a chipload table per tool material (feed per tooth vs tool diameter,
-  interpolated). Seeded from the FeedsAndSpeeds addon's 15 CC-BY material cards (surface
-  speeds only; credited in `materials/ATTRIBUTION.md`). Chipload tables ship empty for Allan
-  to fill. Edits save to the user's FreeCAD data folder, never the shipped file.
-- **Defaults** for an operation, from standard formulas: rpm = 1000·Vc/(π·D), **no spindle cap**
-  (Allan's choice); chipload = the tool's own Chipload if set, else the material's table;
-  cutting (and lead-in/out) = fz·flutes·rpm; plunge (and ramp) = fz·rpm. Applied when an op is
-  created or its tool changes; anything the material can't supply stays at the tool
-  controller's value.
-- **Setup dialog** (`pages/setup.py`, Allan chose our own over a Job property): opens by
-  **double-clicking the Job** (CAM Studio's Job view provider, a thin subclass of FreeCAD's;
-  Jobs from stock CAM are switched over when CAM Studio is active) and from the toolbar's
-  single **Job** button (with solids selected it creates a Job, with a Job selected it opens
-  that Job's setup). Material Library is its own toolbar button. No separate New/Edit Setup. Setup bar (name, models) and Stock bar (Stock Material,
-  summary, Edit Material Library, optional reset of existing ops). Stored as a
-  `StockMaterial` string on the Job.
-- **Not built yet in the Setup dialog**: WCS/orientation, stock size and shape, post-processor
-  settings (button to FreeCAD's Job editor for now), and Fusion's other Setup fields.
+## Stock material and default feeds & speeds (built 2026-11-15)
+Allan's request: pick a material per setup and have it drive default feeds and speeds -- built
+on **FreeCAD's own material system**, not a parallel library (an earlier CAM Studio-only library
+and Setup dialog were replaced; Allan: "I don't want to reinvent the wheel").
+- **Material** = the Job's `Stock.ShapeMaterial`, exactly where stock CAM keeps it. FreeCAD's
+  Machinability model supplies HSS/carbide surface speeds.
+- **Chipload** = CAM Studio's own material model, "CAM Studio Chipload"
+  (`cs_materials/Models/...`), registered with FreeCAD's material system by `Init.py`
+  (Material `ModuleModelDir`): feed-per-tooth tables by tool diameter for HSS and carbide.
+- **Compatibility, verified** (CAM Studio disabled, model unregistered): a material carrying our
+  model loads in plain FreeCAD with its surface speeds intact, documents open and re-save, and
+  the tables survive the round trip. Requires materials to live in FreeCAD's own libraries:
+  chipload edits save to FreeCAD's **User** library; a built-in material gets one inheriting copy
+  in `User/CAM Studio/` (reused on later edits). A dangling model-folder setting after
+  uninstall is harmless (verified). Not verified: editing such a material in vanilla FreeCAD's
+  material editor may drop the tables.
+- **UI**: FreeCAD's Job Edit, plus a labelled **Material: <name> [Change...] [Chipload...]** row
+  in its Stock section (replaces the unlabelled material button). Double-click a Job, or the
+  toolbar's **Job** button, opens it. Menu: **Add Feeds & Speeds Materials** writes the
+  FeedsAndSpeeds addon's 15 materials (CC-BY, credited) into the User library on request.
+- **Defaults**: rpm = 1000*Vc/(pi*D) (no spindle cap); chipload = tool's own Chipload, else the
+  material table; cutting (and leads) = fz*flutes*rpm; plunge (and ramp) = fz*rpm. Applied when
+  an op is created or its tool changes.
 
 ## Phase 2 — 3D operations
 Parallel, Scallop, and other surface-finishing strategies. Spec and implement once Phase 1's UI

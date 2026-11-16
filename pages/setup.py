@@ -1,83 +1,145 @@
-"""CAM Studio's Setup dialog (Fusion's Setup), first version.
+"""CAM Studio's additions to FreeCAD's Job Edit panel.
 
-Opened by double-clicking a Job (JobViewProvider below) and right after New Setup, the way
-Fusion opens a setup. FreeCAD's own Job editor is still one button away on the Setup bar,
-and double-clicking a Job's Model or Stock item still opens FreeCAD's editor on that tab.
+The setup (Job) is edited in FreeCAD's own Job Edit panel -- stock, coordinate system,
+post processor, tools -- unchanged. CAM Studio adds one row to its Stock section:
 
-A task panel for a CAM Job, laid out as stacked bars like the operation dialog:
-- Setup: the setup's name and the models it machines.
-- Stock: the stock material, picked from CAM Studio's material library
-  (materials/library.py), which drives each operation's default feeds and speeds.
+    Material: <stock material>   [Change...]  [Chipload...]
 
-Not built yet (still FreeCAD's own Job editor, reachable from the Setup bar): work
-coordinate system / orientation, stock size and shape, post-processor settings.
+- Change... opens FreeCAD's own machining-material picker (the same one as the panel's
+  unlabelled material button, which this row replaces) and stores the choice where stock
+  CAM keeps it: the Job's Stock.ShapeMaterial.
+- Chipload... edits CAM Studio's chipload tables for that material (cs_materials), which,
+  with the material's surface speeds, drive each operation's default feeds and speeds.
 
-The material is stored on the Job as a `StockMaterial` string property (added on first
-use -- a dynamic property, so the document still opens in plain FreeCAD).
+It's added by JobViewProvider, a thin subclass of FreeCAD's Job view provider: Jobs created
+with CAM Studio's Job button get it, and existing Jobs are switched over while CAM Studio is
+active (adoptJob). Everything else -- double-click, the Model/Stock items, the tree -- is
+FreeCAD's own behavior. (Module and class name are kept: saved documents reference them.)
 """
 
 import FreeCAD
 import FreeCADGui as Gui
-from PySide import QtGui, QtWidgets
+from PySide import QtWidgets
 
 import Path.Main.Gui.Job as PathJobGui
-
-from materials import library
-from widgets.collapsible import CollapsibleSection
 
 translate = FreeCAD.Qt.translate
 
 
-def ensureStockMaterialProperty(job):
-    if not hasattr(job, "StockMaterial"):
-        job.addProperty(
-            "App::PropertyString",
-            "StockMaterial",
-            "CAM Studio",
-            "Stock material from CAM Studio's material library; drives default feeds and "
-            "speeds of new operations",
-        )
-
-
 class JobViewProvider(PathJobGui.ViewProvider):
-    """FreeCAD's Job view provider, except that double-clicking the Job opens CAM Studio's
-    Setup dialog. Everything else -- tree, icons, Model/Stock item editing, FreeCAD's Job
-    editor itself (openTaskPanel) -- is inherited unchanged."""
+    """FreeCAD's Job view provider, plus CAM Studio's Material row in Job Edit."""
 
-    def __init__(self, vobj):
-        super().__init__(vobj)
-        # Upstream starts True so cancelling a brand-new Job's first edit deletes it. Our
-        # Setup dialog never deletes the Job, and that flag would otherwise carry over to
-        # the first time the user opens FreeCAD's Job editor from it.
-        self.deleteOnReject = False
+    def openTaskPanel(self, activate=None):
+        super().openTaskPanel(activate)
+        try:
+            # Keep it alive with the panel: Qt holds only weak references to bound-method
+            # slots, so an unreferenced row would leave its buttons doing nothing.
+            self.taskPanel.camStudioMaterialRow = MaterialRow(self.vobj.Object, self.taskPanel)
+        except Exception as e:  # never break FreeCAD's own panel over our row
+            FreeCAD.Console.PrintWarning("CAM Studio: material row not added: %s\n" % e)
 
-    def setEdit(self, vobj=None, mode=0):
-        if mode != 0:
-            return super().setEdit(vobj, mode)
-        job = self.vobj.Object
-        if not job.Proxy.integrityCheck(job):
-            return False
-        openSetup(job)
-        return True
+
+class MaterialRow:
+    def __init__(self, job, taskPanel):
+        self.job = job
+        self.taskPanel = taskPanel
+        form = taskPanel.form
+        upstreamButton = form.findChild(QtWidgets.QAbstractButton, "btnMaterial")
+        group = upstreamButton.parentWidget() if upstreamButton is not None else None
+        layout = group.layout() if group is not None else None
+        if not isinstance(layout, QtWidgets.QBoxLayout):
+            raise RuntimeError("Job Edit's Stock section has an unexpected layout")
+        upstreamButton.hide()  # same action as our Change... button, minus a label
+
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel(translate("CamStudio_Setup", "Material:")))
+        row.addSpacing(6)
+        self.name = QtWidgets.QLabel()
+        row.addWidget(self.name, 1)
+        change = QtWidgets.QPushButton(translate("CamStudio_Setup", "Change..."))
+        change.setToolTip(translate("CamStudio_Setup", "Pick the stock material (FreeCAD's machining materials)"))
+        change.clicked.connect(self._change)
+        self.chipload = QtWidgets.QPushButton(translate("CamStudio_Setup", "Chipload..."))
+        self.chipload.setToolTip(
+            translate(
+                "CamStudio_Setup",
+                "Feed per tooth by tool diameter for this material (CAM Studio). Drives "
+                "default feeds; spindle speed comes from the material's surface speed.",
+            )
+        )
+        self.chipload.clicked.connect(self._editChipload)
+        row.addWidget(change)
+        row.addWidget(self.chipload)
+        # Right under the stock-type / Refresh row.
+        layout.insertLayout(1, row)
+        self._refresh()
+
+    def _material(self):
+        stock = getattr(self.job, "Stock", None)
+        return getattr(stock, "ShapeMaterial", None) if stock is not None else None
+
+    def _refresh(self):
+        from cs_materials import library
+
+        material = self._material()
+        machining = library.stockMaterial(self.job)
+        if machining is not None:
+            self.name.setText(machining.Name)
+            self.name.setToolTip("")
+        elif material is not None and getattr(material, "Name", ""):
+            self.name.setText(
+                translate("CamStudio_Setup", "%s (no machining data)") % material.Name
+            )
+            self.name.setToolTip(
+                translate(
+                    "CamStudio_Setup",
+                    "This material has no surface speeds, so operations keep the tool "
+                    "controller's feeds and speeds. Pick a machining material.",
+                )
+            )
+        else:
+            self.name.setText(translate("CamStudio_Setup", "(none)"))
+        self.chipload.setEnabled(machining is not None)
+
+    def _change(self):
+        # FreeCAD's own picker and assignment (stores Stock.ShapeMaterial).
+        self.taskPanel.assignMaterial()
+        self._refresh()
+
+    def _editChipload(self):
+        from cs_materials import library
+        from widgets.chipload_editor import ChiploadDialog
+
+        material = library.stockMaterial(self.job)
+        if material is None:
+            return
+        dialog = ChiploadDialog(material, Gui.getMainWindow())
+        if dialog.exec_() and dialog.saved is not None:
+            if dialog.saved.UUID != material.UUID:
+                # A built-in material got an inheriting User-library copy: use that.
+                self.job.Stock.ShapeMaterial = dialog.saved
+            self._refresh()
 
 
 def adoptJob(job):
     """Give `job` CAM Studio's view provider if it still has FreeCAD's plain one (Jobs made
-    with stock CAM, or before this existed). Returns True if it changed."""
+    with stock CAM, or before CAM Studio). Returns True if it changed.
+
+    The existing, already-attached instance is switched to our subclass (it adds no state)
+    rather than replaced: a freshly assigned proxy isn't attached, and re-running upstream
+    attach() would add a second origin-axis display. FreeCAD caches the proxy's methods when
+    Proxy is assigned, so the same instance is re-assigned to refresh that cache."""
     vobj = getattr(job, "ViewObject", None)
     proxy = getattr(vobj, "Proxy", None) if vobj is not None else None
     if type(proxy) is not PathJobGui.ViewProvider:
         return False
-    # Switch the existing, already-attached instance to our subclass rather than assigning
-    # a new one: a freshly assigned proxy isn't attached (no vobj, no origin-axis scene
-    # nodes), and re-running upstream attach() would add a second axis display. Our class
-    # adds no state of its own, and the document saves the new class like any proxy.
     proxy.__class__ = JobViewProvider
-    proxy.deleteOnReject = False
-    # FreeCAD caches the proxy's Python methods (setEdit, ...) when Proxy is assigned, so
-    # re-assign the same instance to make it pick up the new class's methods.
     vobj.Proxy = proxy
     return True
+
+
+def isJob(obj):
+    return hasattr(obj, "Proxy") and type(obj.Proxy).__name__ == "ObjectJob"
 
 
 def adoptJobs(doc=None):
@@ -85,10 +147,6 @@ def adoptJobs(doc=None):
     if doc is None:
         return 0
     return sum(adoptJob(o) for o in doc.Objects if isJob(o))
-
-
-def isJob(obj):
-    return hasattr(obj, "Proxy") and type(obj.Proxy).__name__ == "ObjectJob"
 
 
 class _AdoptOnActivate:
@@ -120,173 +178,3 @@ def installJobAdoption():
         _observer = _AdoptOnActivate()
         FreeCAD.addDocumentObserver(_observer)
     adoptJobs()
-
-
-class SetupTaskPanel:
-    def __init__(self, job):
-        self.job = job
-        self.form = QtWidgets.QToolBox()
-        self.form.setWindowTitle(translate("CamStudio_Setup", "Setup"))
-        self.form.addItem(self._setupBar(), QtGui.QIcon(":/icons/CAM_Job.svg"),
-                          translate("CamStudio_Setup", "Setup"))
-        self.form.addItem(self._stockBar(), QtGui.QIcon(":/icons/CAM_Stock.svg"),
-                          translate("CamStudio_Setup", "Stock"))
-        self.form.setCurrentIndex(1)
-
-    # -- bars ------------------------------------------------------------------------
-    def _setupBar(self):
-        w = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(w)
-        section = CollapsibleSection(translate("CamStudio_Setup", "Setup"))
-        rows = QtWidgets.QFormLayout()
-        self.name = QtWidgets.QLineEdit(self.job.Label)
-        rows.addRow(translate("CamStudio_Setup", "Name"), self.name)
-        models = ", ".join(m.Label for m in getattr(self.job.Model, "Group", [])) or "-"
-        modelLabel = QtWidgets.QLabel(models)
-        modelLabel.setWordWrap(True)
-        rows.addRow(translate("CamStudio_Setup", "Model"), modelLabel)
-        more = QtWidgets.QPushButton(
-            translate("CamStudio_Setup", "Stock Size, WCS && Post Processor...")
-        )
-        more.setToolTip(
-            translate(
-                "CamStudio_Setup",
-                "Not in CAM Studio's Setup dialog yet: opens FreeCAD's own Job editor "
-                "(this dialog's changes are kept).",
-            )
-        )
-        more.clicked.connect(self._openJobEditor)
-        rows.addRow(more)
-        section.setContentLayout(rows)
-        layout.addWidget(section)
-        layout.addStretch(1)
-        return w
-
-    def _stockBar(self):
-        w = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(w)
-        section = CollapsibleSection(translate("CamStudio_Setup", "Stock Material"))
-        rows = QtWidgets.QFormLayout()
-        rows.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
-        self.material = QtWidgets.QComboBox()
-        self.summary = QtWidgets.QLabel()
-        self.summary.setWordWrap(True)
-        editLib = QtWidgets.QPushButton(translate("CamStudio_Setup", "Edit Material Library..."))
-        editLib.clicked.connect(self._editLibrary)
-        self.applyExisting = QtWidgets.QCheckBox(
-            translate("CamStudio_Setup", "Also reset feeds && speeds of this setup's existing operations")
-        )
-        self.applyExisting.setToolTip(
-            translate(
-                "CamStudio_Setup",
-                "New operations always start from the material. Tick this to also overwrite "
-                "the Feed & Speed values of operations already in this setup.",
-            )
-        )
-        rows.addRow(translate("CamStudio_Setup", "Material"), self.material)
-        rows.addRow(self.summary)
-        rows.addRow(editLib)
-        rows.addRow(self.applyExisting)
-        section.setContentLayout(rows)
-        layout.addWidget(section)
-        layout.addStretch(1)
-        self.material.currentIndexChanged.connect(self._updateSummary)
-        self._fillMaterials(getattr(self.job, "StockMaterial", ""))
-        return w
-
-    # -- material ----------------------------------------------------------------------
-    def _fillMaterials(self, select):
-        self.library = library.load()
-        self.material.blockSignals(True)
-        self.material.clear()
-        self.material.addItem(translate("CamStudio_Setup", "(none - use tool controller feeds)"), "")
-        for m in self.library:
-            self.material.addItem(m["name"], m["name"])
-        if select and library.find(select, self.library) is None:
-            # Keep a name the library no longer has, visibly, rather than silently dropping it.
-            self.material.addItem(
-                translate("CamStudio_Setup", "%s (not in library)") % select, select
-            )
-        index = max(0, self.material.findData(select))
-        self.material.setCurrentIndex(index)
-        self.material.blockSignals(False)
-        self._updateSummary()
-
-    def _updateSummary(self, *_args):
-        name = self.material.currentData()
-        m = library.find(name, self.library) if name else None
-        if not name:
-            self.summary.setText(
-                translate("CamStudio_Setup", "Operations take their feeds and speeds from the tool controller.")
-            )
-            return
-        if m is None:
-            self.summary.setText(
-                translate("CamStudio_Setup", "Not in the material library: operations fall back to tool controller feeds.")
-            )
-            return
-        imperial = FreeCAD.Units.Quantity(1.0, FreeCAD.Units.Length).getUserPreferred()[2] == "in"
-        unit, scale = ("ft/min", 0.3048) if imperial else ("m/min", 1.0)
-        parts = []
-        for toolMat in library.TOOL_MATERIALS:
-            n = len(m["chipload"][toolMat])
-            chip = (translate("CamStudio_Setup", "%d chipload rows") % n) if n else translate(
-                "CamStudio_Setup", "no chipload table (feeds from tool chipload or tool controller)"
-            )
-            parts.append("%s: %.0f %s, %s" % (toolMat, m["surfaceSpeed"][toolMat] / scale, unit, chip))
-        self.summary.setText("\n".join(parts))
-
-    def _editLibrary(self):
-        from widgets.material_library import MaterialLibraryDialog
-
-        current = self.material.currentData()
-        dialog = MaterialLibraryDialog(Gui.getMainWindow(), select=current or None)
-        if dialog.exec_():
-            self._fillMaterials(current)
-
-    def _openJobEditor(self):
-        self.accept()
-        # FreeCAD's own Job editor (inherited, not overridden in JobViewProvider).
-        self.job.ViewObject.Proxy.openTaskPanel()
-
-    # -- task panel ----------------------------------------------------------------------
-    def getStandardButtons(self):
-        return QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
-
-    def accept(self):
-        doc = self.job.Document
-        doc.openTransaction("Edit Setup")
-        name = self.name.text().strip()
-        if name and name != self.job.Label:
-            self.job.Label = name
-        material = self.material.currentData() or ""
-        ensureStockMaterialProperty(self.job)
-        self.job.StockMaterial = material
-        if self.applyExisting.isChecked():
-            for op in getattr(self.job.Operations, "Group", []):
-                proxy = getattr(op, "Proxy", None)
-                if hasattr(proxy, "loadDefaultFeeds"):
-                    proxy.loadDefaultFeeds(op)
-                    op.touch()
-        doc.commitTransaction()
-        doc.recompute()
-        self._close()
-        return True
-
-    def reject(self):
-        self._close()
-        return True
-
-    def _close(self):
-        Gui.Control.closeDialog()
-        # Opened by a double-click, the Job is in edit mode until we end it.
-        guiDoc = Gui.getDocument(self.job.Document.Name)
-        if guiDoc is not None and guiDoc.getInEdit() is not None:
-            guiDoc.resetEdit()
-
-
-def openSetup(job):
-    Gui.Control.closeDialog()
-    panel = SetupTaskPanel(job)
-    Gui.Control.showDialog(panel)
-    return panel

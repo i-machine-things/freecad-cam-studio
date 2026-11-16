@@ -13,13 +13,12 @@ class CamStudioWorkbench(Gui.Workbench):
 
     toolbar_list = [
         "CamStudio_Job",
-        "CamStudio_MaterialLibrary",
         "Separator",
         "CamStudio_Pocket",
     ]
     menu_list = [
         "CamStudio_Job",
-        "CamStudio_MaterialLibrary",
+        "CamStudio_ImportMaterials",
         "Separator",
         "CamStudio_Pocket",
     ]
@@ -28,7 +27,7 @@ class CamStudioWorkbench(Gui.Workbench):
         # Deferred import, per FreeCAD's convention of keeping addon startup cost near zero
         # until the workbench is actually activated.
         import commands.create_job  # noqa: F401
-        import commands.material_library  # noqa: F401
+        import commands.import_materials  # noqa: F401
         import commands.create_pocket  # noqa: F401
 
         self.appendToolbar("CAM Studio", self.toolbar_list)

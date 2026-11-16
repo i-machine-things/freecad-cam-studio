@@ -340,9 +340,10 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
 
     def loadFeedsFromTool(self, obj):
         """Fill this op's own Feed & Speed from its defaults: the setup's stock material
-        when it has one (materials/library.py: spindle speed from the material's surface
-        speed for this tool's material and diameter; feeds from the chipload -- the tool's
-        own, else the material's table), otherwise the tool controller's values. Fusion
+        when it has machining data (cs_materials/library.py: spindle speed from the
+        material's surface speed for this tool's material and diameter; feeds from the
+        chipload -- the tool's own, else the material's table), otherwise the tool
+        controller's values. Fusion
         fills an operation from the tool's preset for the material the same way.
 
         Whatever the material can't supply (e.g. no chipload known) stays at the tool
@@ -368,33 +369,16 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
     loadDefaultFeeds = loadFeedsFromTool
 
     def materialDefaults(self, obj):
-        """materials.library.defaultFeeds for this op's tool in its setup's stock material,
-        or None (no material set, unknown material, or no surface speed for it)."""
+        """cs_materials.library.defaultFeedsFor this op's tool in its setup's stock material
+        (FreeCAD's Job Stock material), or None if the stock has no machining data."""
         import PathScripts.PathUtils as PathUtils
-        from materials import library
+        from cs_materials import library
 
         job = PathUtils.findParentJob(obj)
-        name = getattr(job, "StockMaterial", "") if job is not None else ""
         tc = getattr(obj, "ToolController", None)
-        if not name or tc is None:
+        if job is None or tc is None:
             return None
-        material = library.find(name)
-        if material is None:
-            Path.Log.warning(
-                "%s: stock material '%s' is not in the material library; using the tool "
-                "controller's feeds and speeds.\n" % (obj.Label, name)
-            )
-            return None
-        tool = tc.Tool
-        chip = getattr(tool, "Chipload", 0)
-        chip = getattr(chip, "Value", chip) or 0.0
-        return library.defaultFeeds(
-            material,
-            library.toolMaterial(tool),
-            tool.Diameter.Value,
-            int(getattr(tool, "Flutes", 0) or 0),
-            float(chip),
-        )
+        return library.defaultFeedsFor(job, tc.Tool)
 
     def opExecute(self, obj, *args, **kwargs):
         # Base.execute has just read the tool controller's feeds into self.horizFeed /

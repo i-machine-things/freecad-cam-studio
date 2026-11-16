@@ -1,9 +1,10 @@
 """CAM Studio's Job toolbar action.
 
 - CamStudio_Job: with solids selected, creates a new Job (setup) through FreeCAD CAM's own
-  creation pipeline (Path.Main.Gui.Job.Create, unmodified) and opens CAM Studio's Setup
-  dialog for it, as Fusion opens a new setup. With a Job -- or anything inside one --
-  selected, opens that Job's Setup dialog instead. Double-clicking a Job does the same.
+  creation pipeline (Path.Main.Gui.Job.Create, unmodified) and opens FreeCAD's Job Edit
+  for it -- with CAM Studio's Material row (pages/setup.py) -- as Fusion opens a new
+  setup. With a Job, or anything inside one, selected, opens that Job's Job Edit instead
+  (the same as double-clicking the Job).
 """
 
 import FreeCAD
@@ -52,19 +53,27 @@ class CommandJob:
         return _selectedJob() is not None or _selectedSolids() is not None
 
     def Activated(self):
-        from pages.setup import adoptJob, openSetup
+        from pages.setup import adoptJob
 
         job = _selectedJob()
-        if job is None:
+        isNew = job is None
+        if isNew:
             solids = _selectedSolids()
             if not solids:
                 return
-            # openTaskPanel=False: CAM Studio's Setup dialog opens instead of FreeCAD's.
+            # Created without its panel so it gets CAM Studio's view provider first; the
+            # panel is then opened the way FreeCAD's own Create(openTaskPanel=True) does.
             job = PathJobGui.Create(solids, None, openTaskPanel=False)
             if job is None:
                 return
         adoptJob(job)
-        openSetup(job)
+        proxy = job.ViewObject.Proxy
+        if isNew:
+            # As in FreeCAD: cancelling a brand-new Job's first edit removes it.
+            proxy.deleteOnReject = True
+            proxy.editObject(job.Stock)
+        else:
+            proxy.openTaskPanel()
 
 
 Gui.addCommand("CamStudio_Job", CommandJob())
