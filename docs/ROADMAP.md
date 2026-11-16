@@ -124,7 +124,7 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       from Autodesk's authoritative reference page** (not a forum post this time): Fusion actually
       has **seven** Ramp Type options, not five — Plunge, Plunge Outside Stock, Zig-Zag, Profile,
       Smooth Profile, Predrill, Helix. Only Helix is built. Added (next commit) `HelicalRampDiameter`
-      / `MinimumRampDiameter` (user-adjustable now, default 1.5x tool diameter) and
+      / `MinimumRampDiameter` (user-adjustable now; default 1 x tool diameter -- was 1.5x, changed at Allan's request) and
       `MaxRampStepdown`. **Now pocket-geometry-aware** (CodeRabbit flagged on PR #1 that an unchecked
       helix can swing the cutter into a wall on a small pocket; first deferred on the belief that
       the pocket shape wasn't available at the post-process stage — it is: upstream leaves this

@@ -59,6 +59,7 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
     # net that should rarely bind once revolutions are already bounded. 50 revolutions is
     # already far more than any real single-entry ramp needs.
     RAMP_TYPES = ["Plunge", "Plunge Outside Stock", "Helix"]
+    HELIX_DEFAULT_DIAMETERS = 1.0  # auto helix diameter, x tool diameter (Allan)
     MAX_RAMP_REVOLUTIONS = 50
     MAX_RAMP_SEGMENTS = 2000
 
@@ -133,7 +134,7 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
                 "Pocket",
                 QT_TRANSLATE_NOOP(
                     "App::Property",
-                    "Target diameter of the helix ramp entry. 0 = auto (1.5x tool diameter)",
+                    "Target diameter of the helix ramp entry. 0 = auto (1 x tool diameter)",
                 ),
             )
             obj.HelicalRampDiameter = 0
@@ -765,12 +766,12 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
 
     def _helixRampDiameters(self, obj):
         """Candidate helix diameters, largest (preferred) first: HelicalRampDiameter (0 =
-        auto, 1.5x tool diameter), then -- only if MinimumRampDiameter is set and smaller --
+        auto, 1 x tool diameter -- Allan's default), then -- only if MinimumRampDiameter is set and smaller --
         evenly stepped down to MinimumRampDiameter. A minimum larger than the target raises
         the target to it, as before."""
         target = obj.HelicalRampDiameter.Value
         if target <= 0:
-            target = self.tool.Diameter.Value * 1.5
+            target = self.tool.Diameter.Value * self.HELIX_DEFAULT_DIAMETERS
         minimum = obj.MinimumRampDiameter.Value
         if minimum >= target:
             return [minimum]

@@ -1008,7 +1008,7 @@ class LinkingPage(_BarPage):
         ramp_layout.addRow(translate("CamStudio_Pocket", "Ramp Type"), form.rampType)
         ramp_layout.addRow(translate("CamStudio_Pocket", "Ramp Angle"), form.rampAngle)
         ramp_layout.addRow(
-            translate("CamStudio_Pocket", "Helical Ramp Diameter (0 = auto)"),
+            translate("CamStudio_Pocket", "Helical Ramp Diameter (0 = 1 x tool \u00d8)"),
             form.helicalRampDiameter,
         )
         ramp_layout.addRow(
