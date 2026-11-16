@@ -179,6 +179,21 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             ("Coolant", form.coolantController),
         ):
             fs_layout.addRow(translate("CamStudio_Pocket", label), widget)
+        # Re-apply the defaults for the current tool and stock material (Fusion fills an
+        # operation from the tool preset the same way when the tool is picked).
+        form.resetFeeds = QtWidgets.QPushButton(translate("CamStudio_Pocket", "Reset to Defaults"))
+        form.resetFeeds.setToolTip(
+            translate(
+                "CamStudio_Pocket",
+                "Replace this operation's speeds and feeds with the defaults for its tool and "
+                "the setup's stock material",
+            )
+        )
+        form.resetFeeds.clicked.connect(self._onResetFeeds)
+        form.feedSource = QtWidgets.QLabel()
+        form.feedSource.setWordWrap(True)
+        fs_layout.addRow(form.resetFeeds)
+        fs_layout.addRow(form.feedSource)
         fs_group.setContentLayout(fs_layout)
         layout.addWidget(fs_group)
         # Keep each derived field and its partner in step as either is edited.
@@ -293,6 +308,10 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
         f.spindleSpeed.setProperty("camStudioLoaded", f.spindleSpeed.value())
         f.rampSpindleSpeed.setProperty("camStudioLoaded", f.rampSpindleSpeed.value())
         self._refreshDerived()
+        try:
+            f.feedSource.setText(self._describeDefaults(obj))
+        except Exception as e:
+            f.feedSource.setText(str(e))
 
     def _commitFeedFields(self, obj):
         # Only write a field the user changed since it was loaded (the boxes round to their
@@ -333,6 +352,35 @@ class TaskPanelOpPage(PathOpGui.TaskPanelPage):
             mmPerMin = f.feedPerTooth.value() * f.lenScale * rpm * flutes
             f.cuttingFeedrate.setValue(mmPerMin / 60.0 / f.feedScale)
             f.cuttingFeedrate.editingFinished.emit()
+
+    def _onResetFeeds(self):
+        obj = self.obj
+        obj.Proxy.loadDefaultFeeds(obj)
+        self._setFeedFields(obj)
+        self.setDirty()
+
+    def _describeDefaults(self, obj):
+        """One line saying where Reset to Defaults takes its values from."""
+        defaults = obj.Proxy.materialDefaults(obj) if hasattr(obj.Proxy, "materialDefaults") else None
+        if defaults is None:
+            return translate(
+                "CamStudio_Pocket",
+                "Defaults: tool controller (the setup's stock has no machining material).",
+            )
+        text = translate("CamStudio_Pocket", "Defaults: %s, %s tool") % (
+            defaults.get("material", "?"),
+            defaults.get("toolMaterial", "?"),
+        )
+        if defaults.get("source") == "tool":
+            text += translate("CamStudio_Pocket", "; chipload from the tool.")
+        elif defaults.get("source") == "material":
+            text += translate("CamStudio_Pocket", "; chipload from the material.")
+        else:
+            text += translate(
+                "CamStudio_Pocket",
+                "; no chipload for this tool, so feeds come from the tool controller.",
+            )
+        return text
 
     def _onPlungePerRevEdited(self):
         f = self.form

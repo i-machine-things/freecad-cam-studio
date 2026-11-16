@@ -375,7 +375,9 @@ and Setup dialog were replaced; Allan: "I don't want to reinvent the wheel").
   FeedsAndSpeeds addon's 15 materials (CC-BY, credited) into the User library on request.
 - **Defaults**: rpm = 1000*Vc/(pi*D) (no spindle cap); chipload = tool's own Chipload, else the
   material table; cutting (and leads) = fz*flutes*rpm; plunge (and ramp) = fz*rpm. Applied when
-  an op is created or its tool changes.
+  an op is created or its tool changes. **Reset to Defaults** on the Tool bar's Feed & Speed section
+  re-applies them on demand, with a line saying where they come from (material + tool
+  material, and whether the chipload came from the tool or the material).
 
 ## Phase 2 — 3D operations
 Parallel, Scallop, and other surface-finishing strategies. Spec and implement once Phase 1's UI
