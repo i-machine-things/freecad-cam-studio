@@ -707,62 +707,75 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         return params
 
     def _applyHelixRampEntry(self, obj):
+        """Replace every straight plunge with a helix ramp (Allan: all plunges, not only the
+        first). Each one is fitted on its own (_fitHelixRamp, walls and islands at that
+        level); a plunge where no helix fits stays a plunge, reported in one warning.
+
+        Ramp Clearance Height counts from the top of the material at that plunge: the
+        previous cut level above it, or the stock top (Start Depth if higher) for the first
+        level -- so later levels don't spiral down through air they already cleared."""
         if not obj.Path or not obj.Path.Commands:
             return
-        cmds = obj.Path.Commands
-        found = self._findFirstPlunge(cmds)
-        if found is None:
+        cmds = list(obj.Path.Commands)
+        plunges = self._entryPlunges(cmds)
+        if not plunges:
             return
-        plungeIdx, start, end = found
-
-        # Ramp Clearance Height: rapid straight down to just above the material and start
-        # the ramp there, instead of spiralling all the way down from the safe height at
-        # plunge feed. The first plunge always enters the top of the material, so "above
-        # the material" is above the stock top (or the op's Start Depth if that's higher).
-        rapidTo = None
+        stockTop = obj.StartDepth.Value
+        opStockTop = getattr(obj, "OpStockZMax", None)
+        if opStockTop is not None:
+            stockTop = max(stockTop, opStockTop.Value)
+        levels = sorted({round(end.z, 6) for _i, _s, end in plunges})
         clearance = getattr(obj, "RampClearanceHeight", None)
-        if clearance is not None:
-            top = obj.StartDepth.Value
-            stockTop = getattr(obj, "OpStockZMax", None)
-            if stockTop is not None:
-                top = max(top, stockTop.Value)
-            rampTop = top + max(0.0, clearance.Value)
-            if end.z + 1e-6 < rampTop < start.z - 1e-6:
-                rapidTo = rampTop
-                start = FreeCAD.Vector(start.x, start.y, rampTop)
-
+        clearance = max(0.0, clearance.Value) if clearance is not None else None
         self.rampFeed = obj.RampFeedrate.Value if hasattr(obj, "RampFeedrate") else self.vertFeed
-        placement = self._fitHelixRamp(obj, end)
-        if placement is None:
-            Path.Log.warning(
-                "%s: no helix ramp between the Helical Ramp Diameter and the Minimum Ramp "
-                "Diameter fits inside the pocket at the entry point -- keeping the straight "
-                "plunge. Reduce the ramp diameters or use a smaller tool.\n" % obj.Label
-            )
-            return
-        radius, centerAngle = placement
-        rampCmds = self._buildHelixRampCommands(
-            start, end, radius, obj.RampAngle.Value, obj.MaxRampStepdown.Value, centerAngle
-        )
-        if not rampCmds:
-            return
-
-        if rapidTo is not None:
-            rampCmds = [Path.Command("G0", {"Z": rapidTo})] + rampCmds
-        # Ramp Spindle Speed: switch for the helix only, then back to the op's speed.
         rampRpm = getattr(obj, "RampSpindleSpeed", None)
         opRpm = getattr(obj, "SpindleSpeed", None)
-        if rampRpm is not None and rampRpm > 0 and abs(rampRpm - opRpm) > 1e-9:
-            during, after = self._spindleCommand(rampRpm), self._spindleCommand(opRpm)
-            if during is not None and after is not None:
-                rampCmds = [during] + rampCmds + [after]
-        newCmds = list(cmds[:plungeIdx]) + rampCmds + list(cmds[plungeIdx + 1 :])
-        obj.Path = Path.Path(newCmds)
-        # The cycle-time estimate was already computed by super().execute(obj) against the
-        # shorter straight-plunge path -- recompute it now that the path is longer, and
-        # refresh the Job-level total the same way the base execute() does.
-        obj.CycleTime = PathOp.getCycleTimeEstimate(obj)
-        self.job.Proxy.getCycleTime()
+        spindleSwitch = (
+            rampRpm is not None and rampRpm > 0 and opRpm is not None and abs(rampRpm - opRpm) > 1e-9
+        )
+        kept, changed = 0, False
+        for plungeIdx, start, end in reversed(plunges):
+            rapidTo = None
+            if clearance is not None:
+                above = [z for z in levels if z > round(end.z, 6) + 1e-6]
+                materialTop = min(above) if above else stockTop
+                rampTop = materialTop + clearance
+                if end.z + 1e-6 < rampTop < start.z - 1e-6:
+                    rapidTo = rampTop
+                    start = FreeCAD.Vector(start.x, start.y, rampTop)
+            placement = self._fitHelixRamp(obj, end)
+            if placement is None:
+                kept += 1
+                continue
+            radius, centerAngle = placement
+            rampCmds = self._buildHelixRampCommands(
+                start, end, radius, obj.RampAngle.Value, obj.MaxRampStepdown.Value, centerAngle
+            )
+            if not rampCmds:
+                kept += 1
+                continue
+            if rapidTo is not None:
+                rampCmds = [Path.Command("G0", {"Z": rapidTo})] + rampCmds
+            # Ramp Spindle Speed: switch for the helix only, then back to the op's speed.
+            if spindleSwitch:
+                during, after = self._spindleCommand(rampRpm), self._spindleCommand(opRpm)
+                if during is not None and after is not None:
+                    rampCmds = [during] + rampCmds + [after]
+            cmds[plungeIdx : plungeIdx + 1] = rampCmds
+            changed = True
+        if kept:
+            Path.Log.warning(
+                "%s: %d plunge%s kept straight -- no helix between the Helical Ramp Diameter "
+                "and the Minimum Ramp Diameter fits there (a ring starting in a corner never "
+                "fits one; elsewhere, reduce the ramp diameters).\n"
+                % (obj.Label, kept, "" if kept == 1 else "s")
+            )
+        if changed:
+            obj.Path = Path.Path(cmds)
+            # The cycle-time estimate was computed by super().execute(obj) for the straight
+            # plunges -- recompute it, and the Job total, as the base execute() does.
+            obj.CycleTime = PathOp.getCycleTimeEstimate(obj)
+            self.job.Proxy.getCycleTime()
 
     def _helixRampDiameters(self, obj):
         """Candidate helix diameters, largest (preferred) first: HelicalRampDiameter (0 =

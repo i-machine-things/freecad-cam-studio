@@ -136,8 +136,9 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       If nothing fits, the straight plunge is kept and a warning is logged. Verified on real
       `Path.Commands` against an independent 2D distance-to-wall/island check, with the pre-fix
       code as a negative control.
-      Still missing: **Ramp Clearance Height**, **Ramp Taper Angle** (conical helix, distinct from
-      Ramping Angle), and per-level/per-region ramping (every plunge, not just the first).
+      Still missing: **Ramp Taper Angle** (conical helix, distinct from Ramping Angle). **Every
+      plunge now ramps** (Allan): each is fitted on its own; Ramp Clearance Height counts from the
+      previous cut level; a ring starting in a corner can't fit a helix and keeps its plunge.
 - [x] Tool selection: Fusion's "Select..." tool-library browser, added alongside the existing
       inline combo (`widgets/tool_picker.py`, cross-cutting — any operation page can use it, used
       first by Pocket). Reuses FreeCAD's own existing `Path.Tool.toolbit.ui.selector.ToolBitSelector`
