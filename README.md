@@ -31,7 +31,14 @@ behavior/workflow spec for Fusion 360 CAM from public sources, to implement agai
 
 ## Scope
 
-Full breadth is the goal — 2.5D milling, 3D, turning, and simulation — sequenced in phases
+**Endgame: 1:1 or better usability versus Fusion 360 CAM, using the same or a closely similar
+workflow** — same mental model (Setup → Stock/WCS → Operations → Simulate → Post), equivalent or
+better efficiency, no missing capability that sends a Fusion user back to Fusion. That's a
+usability/workflow goal, not a literal pixel-clone goal — see
+[docs/ROADMAP.md](docs/ROADMAP.md)'s "Endgame" section for the distinction and
+[docs/CLEAN-ROOM.md](docs/CLEAN-ROOM.md) for why it matters.
+
+Full breadth is the goal — 2.5D milling, simulation, 3D, and turning — sequenced in phases
 (see the roadmap). 2.5D milling is the first implementation target since it's the closest match
 to FreeCAD's existing `Path` workbench capability today.
 
