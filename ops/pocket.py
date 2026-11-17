@@ -994,13 +994,10 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         engagement at a single point. Lead-out mirrors this at the tail, before the final
         retract.
 
-        V1 scope, stated plainly (same honesty as the Helix ramp above):
-        - Only the operation's single first plunge / single final cutting move are
-          treated -- same single-entry-point scope as the Helix ramp, not per-level or
-          per-region.
-        - Only a straight (G1) first/last cutting move is supported; if the first move
-          after the plunge (or the last move before the final retract) is an arc (G2/G3),
-          this is skipped rather than guessing a tangent direction.
+        Scope:
+        - Every entry (plunge) gets a lead-in and every exit (last cut before the tool
+          lifts) a lead-out, each fitted on its own. Each attaches tangent to the move it
+          joins -- straight or arc (G2/G3).
         - Pocket-geometry-aware by rejection, not by adaptation: each lead's swept cutter
           area (tool radius + the radial Stock to Leave in force for that move) is checked
           against the pocket's walls and islands (_sweptAreaFits). The arc is tried on
@@ -1012,12 +1009,10 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         cmds = list(obj.Path.Commands)
         toolRadius = self.tool.Diameter.Value / 2.0
         stockToLeave = obj.ExtraOffset.Value
-        # The first plunge always belongs to the roughing pass. The last cutting move
-        # belongs to the final finishing pass when finishing passes ran (see execute()),
-        # and that pass cuts at the true wall -- no radial stock left.
-        finished = int(getattr(obj, "FinishingPasses", 0)) > 0 and stockToLeave != 0
+        # Leads on roughing passes must respect the radial stock to leave; using that same
+        # clearance for the finishing passes' leads too is the conservative choice.
         leadInClearance = toolRadius + stockToLeave
-        leadOutClearance = toolRadius + (0.0 if finished else stockToLeave)
+        leadOutClearance = toolRadius + stockToLeave
         # Climb milling keeps the tool to the left of the material, so the open side --
         # where a lead arc has room -- is to the left of travel; conventional, the right.
         # Only a preference: the other side is still tried, and the fit check decides.
@@ -1025,22 +1020,31 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
 
         self.leadInFeed = obj.LeadInFeedrate.Value if hasattr(obj, "LeadInFeedrate") else self.horizFeed
         self.leadOutFeed = obj.LeadOutFeedrate.Value if hasattr(obj, "LeadOutFeedrate") else self.horizFeed
+        # Every entry gets a lead-in and every exit a lead-out (Allan: not only the first
+        # and last). Entries are the plunges; exits the last cut before the tool lifts.
+        # Worked from the end of the path backward so earlier indices stay valid.
+        events = []
+        inSpec = self._leadSpec(obj, "Lead-In") if getattr(obj, "UseLeadIn", False) else None
+        outSpec = self._leadSpec(obj, "Lead-Out") if getattr(obj, "UseLeadOut", False) else None
+        if inSpec is not None:
+            events += [(idx, "in", (start, end)) for idx, start, end in self._entryPlunges(cmds)]
+        if outSpec is not None:
+            events += [(idx, "out", None) for idx in self._exitCuts(cmds)]
+        skipped = {"Lead-In": 0, "Lead-Out": 0}
         changed = False
-        for which, enabled, insert, clearance in (
-            ("Lead-In", getattr(obj, "UseLeadIn", False), self._insertLeadIn, leadInClearance),
-            ("Lead-Out", getattr(obj, "UseLeadOut", False), self._insertLeadOut, leadOutClearance),
-        ):
-            if not enabled:
-                continue
-            spec = self._leadSpec(obj, which)
-            if spec is None:
-                continue
-            newCmds = insert(cmds, spec, clearance, sides)
-            if newCmds is not None:
-                cmds = newCmds
-                changed = True
+        for idx, kind, data in sorted(events, key=lambda e: e[0], reverse=True):
+            if kind == "in":
+                newCmds = self._insertLeadIn(cmds, inSpec, leadInClearance, sides, idx, *data)
             else:
-                self._warnLeadSkipped(obj, which)
+                newCmds = self._insertLeadOut(cmds, outSpec, leadOutClearance, sides, idx)
+            if newCmds is None:
+                skipped["Lead-In" if kind == "in" else "Lead-Out"] += 1
+                continue
+            cmds = newCmds
+            changed = True
+        for which, count in skipped.items():
+            if count:
+                self._warnLeadSkipped(obj, which, count)
 
         if changed:
             obj.Path = Path.Path(cmds)
@@ -1060,11 +1064,57 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             return None
         return radius, sweep, linear, bool(getattr(obj, prefix + "Perpendicular"))
 
-    def _warnLeadSkipped(self, obj, which):
+    def _warnLeadSkipped(self, obj, which, count=1):
         Path.Log.warning(
-            "%s: %s left out -- it does not fit inside the pocket with these values, or the "
-            "adjacent move is not a straight cut it can be aligned to.\n" % (obj.Label, which)
+            "%s: %d %s%s left out -- no room inside the pocket there with these values (e.g. "
+            "right against a wall).\n" % (obj.Label, count, which, "" if count == 1 else "s")
         )
+
+    def _exitCuts(self, cmds):
+        """Indices of the last cutting move (with XY travel) before each point where the tool
+        lifts -- a rapid that rises -- or the path ends."""
+        out = []
+        x = y = z = None
+        lastCut = None
+        for i, cmd in enumerate(cmds):
+            p = cmd.Parameters
+            nx, ny, nz = p.get("X", x), p.get("Y", y), p.get("Z", z)
+            if cmd.Name in ("G1", "G01", "G2", "G02", "G3", "G03"):
+                if (nx, ny) != (x, y) and nz is not None and z is not None and abs(nz - z) < 1e-9:
+                    lastCut = i
+                elif nz is not None and z is not None and nz < z - 1e-9:
+                    lastCut = None  # a plunge starts a new cut
+            elif cmd.Name in ("G0", "G00") and nz is not None and z is not None and nz > z + 1e-9:
+                if lastCut is not None:
+                    out.append(lastCut)
+                lastCut = None
+            x, y, z = nx, ny, nz
+        if lastCut is not None:
+            out.append(lastCut)
+        return out
+
+    @staticmethod
+    def _moveTangent(cmd, fromX, fromY, atEnd):
+        """Unit travel direction of a G1/G2/G3 move from (fromX, fromY): at its start, or at
+        its end if `atEnd`. Arcs give the tangent there (I/J = center offset from the start).
+        None for a move with no XY travel."""
+        p = cmd.Parameters
+        toX, toY = p.get("X", fromX), p.get("Y", fromY)
+        if cmd.Name in ("G2", "G02", "G3", "G03") and ("I" in p or "J" in p):
+            cx, cy = fromX + p.get("I", 0.0), fromY + p.get("J", 0.0)
+            px, py = (toX, toY) if atEnd else (fromX, fromY)
+            rx, ry = px - cx, py - cy
+            r = math.hypot(rx, ry)
+            if r < 1e-9:
+                return None
+            if cmd.Name in ("G3", "G03"):  # counter-clockwise
+                return -ry / r, rx / r
+            return ry / r, -rx / r
+        dx, dy = toX - fromX, toY - fromY
+        length = math.hypot(dx, dy)
+        if length < 1e-6:
+            return None
+        return dx / length, dy / length
 
     @staticmethod
     def _leadGeometry(px, py, dx, dy, spec, side, entering):
@@ -1137,27 +1187,27 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
                 break  # no arc: both sides are the same straight leg
         return None
 
-    def _insertLeadIn(self, cmds, spec, clearance, sides):
-        """Return `cmds` with a lead-in added at the first plunge, or None if it can't be
-        added safely. `spec` is a _leadSpec tuple; `clearance` is the radius the cutter
-        must keep clear around its center (tool radius + radial stock to leave)."""
-        found = self._findFirstPlunge(cmds)
-        if found is None:
-            return None
-        plungeIdx, start, end = found
+    def _insertLeadIn(self, cmds, spec, clearance, sides, plungeIdx=None, start=None, end=None):
+        """Return `cmds` with a lead-in added at a plunge (the first one if `plungeIdx` is
+        None), or None if it can't be added safely. `spec` is a _leadSpec tuple;
+        `clearance` is the radius the cutter must keep clear around its center (tool radius
+        + radial stock to leave). The lead is tangent to the first cutting move, straight
+        or arc."""
+        if plungeIdx is None:
+            found = self._findFirstPlunge(cmds)
+            if found is None:
+                return None
+            plungeIdx, start, end = found
         nextIdx = plungeIdx + 1
         if nextIdx >= len(cmds):
             return None
         nextCmd = cmds[nextIdx]
-        if nextCmd.Name not in ("G1", "G01"):
+        if nextCmd.Name not in ("G1", "G01", "G2", "G02", "G3", "G03"):
             return None
-        p = nextCmd.Parameters
-        qx, qy = p.get("X", end.x), p.get("Y", end.y)
-        dx, dy = qx - end.x, qy - end.y
-        length = math.hypot(dx, dy)
-        if length < 1e-6:
+        tangent = self._moveTangent(nextCmd, end.x, end.y, atEnd=False)
+        if tangent is None:
             return None
-        dx, dy = dx / length, dy / length
+        dx, dy = tangent
         lead = self._fitLead(end.x, end.y, dx, dy, spec, clearance, sides, end.z, True)
         if lead is None:
             return None
@@ -1398,19 +1448,21 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         )
         return newCmds
 
-    def _insertLeadOut(self, cmds, spec, clearance, sides):
-        """Mirror of _insertLeadIn at the tail: leave the true end point of the last
-        cutting move along that move's own direction (arc first, then the straight leg)
-        before the final retract. Returns None if it can't be added safely."""
-        lastCutIdx = None
-        for i in range(len(cmds) - 1, -1, -1):
-            if cmds[i].Name in ("G1", "G01", "G2", "G02", "G3", "G03"):
-                lastCutIdx = i
-                break
+    def _insertLeadOut(self, cmds, spec, clearance, sides, cutIdx=None):
+        """Mirror of _insertLeadIn at an exit: leave the end point of a cutting move (the last
+        one if `cutIdx` is None) along its own direction -- tangent, for an arc -- arc first,
+        then the straight leg, before the retract. Returns None if it can't be added
+        safely."""
+        lastCutIdx = cutIdx
+        if lastCutIdx is None:
+            for i in range(len(cmds) - 1, -1, -1):
+                if cmds[i].Name in ("G1", "G01", "G2", "G02", "G3", "G03"):
+                    lastCutIdx = i
+                    break
         if lastCutIdx is None or lastCutIdx == 0:
             return None
         lastCut = cmds[lastCutIdx]
-        if lastCut.Name not in ("G1", "G01"):
+        if lastCut.Name not in ("G1", "G01", "G2", "G02", "G3", "G03"):
             return None
 
         lastX = lastY = lastZ = None
@@ -1423,11 +1475,10 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         endX, endY, endZ = p.get("X", lastX), p.get("Y", lastY), p.get("Z", lastZ)
         if lastX is None or endX is None or lastY is None or endY is None or endZ is None:
             return None
-        dx, dy = endX - lastX, endY - lastY
-        length = math.hypot(dx, dy)
-        if length < 1e-6:
+        tangent = self._moveTangent(lastCut, lastX, lastY, atEnd=True)
+        if tangent is None:
             return None
-        dx, dy = dx / length, dy / length
+        dx, dy = tangent
         lead = self._fitLead(endX, endY, dx, dy, spec, clearance, sides, endZ, False)
         if lead is None:
             return None

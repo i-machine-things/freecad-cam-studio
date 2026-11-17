@@ -269,6 +269,8 @@ subclasses in `ops/` rather than a whole new toolpath engine.
       `Path.Commands`: radii consistent, arc tangent to the cut at the attach point, FreeCAD's
       own `Path.Geom.edgeForCmd` reads the expected arc length, plunge sits at the lead's outer
       end with no diagonal descent, save/reopen recomputes to the identical path.
+      **Leads on every entry and exit** (Allan: they "weren't working" because only the first
+      plunge and final cut got one, and arc moves were skipped); arcs now attach tangentially.
       **Known limit, found while testing**: stock Offset-pattern output ends its last ring *in a
       corner* (the ring starts and ends on a vertex), where the cutter is tangent to two walls —
       no tangent exit of any shape fits there, so Lead-Out is rejected on a square-cornered
@@ -393,7 +395,7 @@ Selected contour(s)) and an **Offset**.
 | Keep Tool Down | Have | FreeCAD `KeepToolDown`, on the Linking bar. Stays down for links up to one tool diameter (upstream's fixed limit) |
 | Maximum Stay-Down Distance | Missing | Upstream's link distance is the right hook, but its links are straight and unchecked. Fusion's 2 in default would let one cut through an island or plough through uncut stock. Needs each link checked against walls/islands *and* the area cleared so far before the limit can be raised |
 | Lift Height | Missing | |
-| Lead-In (Entry), Horizontal Lead-In Radius, Lead-In Sweep Angle, Linear Lead-In Distance, Perpendicular | Have | |
+| Lead-In (Entry), Horizontal Lead-In Radius, Lead-In Sweep Angle, Linear Lead-In Distance, Perpendicular | Have Applied at **every** entry and exit (each fitted on its own), tangent to straight or arc moves |
 | Vertical Lead-In Radius | Missing | |
 | Lead-Out (Exit), Same as Lead-In | Have | Fusion lists only these two with Same as Lead-In ticked |
 | Ramp Type | Partial | Plunge, **Plunge Outside Stock**, Helix of 7 |
