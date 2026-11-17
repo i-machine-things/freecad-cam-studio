@@ -701,11 +701,7 @@ class PassesPage(_BarPage):
         form.useOutline = QtWidgets.QCheckBox(
             translate("CamStudio_Pocket", "Use outline of selected geometry (ignore islands)")
         )
-        form.useStartPoint = QtWidgets.QCheckBox(
-            translate("CamStudio_Pocket", "Use custom start point")
-        )
         options_layout.addRow(form.useOutline)
-        options_layout.addRow(form.useStartPoint)
         options_group.setContentLayout(options_layout)
         layout.addWidget(options_group)
 
@@ -873,8 +869,6 @@ class PassesPage(_BarPage):
             obj.FinishFeedrate = finishFeedMmPerSec
         if obj.UseOutline != self.form.useOutline.isChecked():
             obj.UseOutline = self.form.useOutline.isChecked()
-        if obj.UseStartPoint != self.form.useStartPoint.isChecked():
-            obj.UseStartPoint = self.form.useStartPoint.isChecked()
 
     def setFields(self, obj):
         self._fillSidewaysCompensation(obj)
@@ -893,7 +887,6 @@ class PassesPage(_BarPage):
         self.form.finishingPasses.setValue(obj.FinishingPasses)
         self.form.finishFeedrate.setValue(obj.FinishFeedrate.Value / self.form.finishFeedScale)
         self.form.useOutline.setChecked(obj.UseOutline)
-        self.form.useStartPoint.setChecked(obj.UseStartPoint)
 
     def getSignalsForUpdate(self, obj):
         return [
@@ -911,7 +904,6 @@ class PassesPage(_BarPage):
             self.form.finishingPasses.editingFinished,
             self.form.finishFeedrate.editingFinished,
             self.form.useOutline.clicked,
-            self.form.useStartPoint.clicked,
         ]
 
 
@@ -1043,6 +1035,34 @@ class LinkingPage(_BarPage):
         )
         ramp_group.setContentLayout(ramp_layout)
         layout.addWidget(ramp_group)
+
+        # Fusion's Positions: where each pass is entered (ops/pocket.py
+        # _applyPreferredEntries restarts each entered ring nearest these points).
+        positions_group = CollapsibleSection(translate("CamStudio_Pocket", "Positions"))
+        positions_layout = QtWidgets.QFormLayout()
+        positions_layout.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
+        form.pickPreferred = QtWidgets.QPushButton(translate("CamStudio_Pocket", "Select"))
+        form.pickPreferred.setToolTip(
+            translate(
+                "CamStudio_Pocket",
+                "Click a point in the 3D view; each pass is entered at its point nearest the "
+                "closest preferred position. Select again to add more.",
+            )
+        )
+        form.clearPreferred = QtWidgets.QPushButton(translate("CamStudio_Pocket", "Clear"))
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.addWidget(form.pickPreferred)
+        buttons.addWidget(form.clearPreferred)
+        positions_layout.addRow(
+            translate("CamStudio_Pocket", "Preferred Lead-In Positions"), buttons
+        )
+        form.preferredInfo = QtWidgets.QLabel()
+        form.preferredInfo.setWordWrap(True)
+        positions_layout.addRow(form.preferredInfo)
+        positions_group.setContentLayout(positions_layout)
+        layout.addWidget(positions_group)
+        form.pickPreferred.clicked.connect(self._pickPreferred)
+        form.clearPreferred.clicked.connect(self._clearPreferred)
         layout.addStretch(1)
         return form
 
@@ -1089,6 +1109,11 @@ class LinkingPage(_BarPage):
         _qty_commit(obj, "MaxRampStepdown", self.form.maxRampStepdown)
         _qty_commit(obj, "RampClearanceHeight", self.form.rampClearanceHeight)
         _qty_commit(obj, "OutsidePlungeDistance", self.form.outsidePlungeDistance)
+        if hasattr(obj, "PreferredEntryPoints"):
+            pts = list(getattr(self, "preferredPoints", []))
+            current = [(round(v.x, 9), round(v.y, 9)) for v in obj.PreferredEntryPoints]
+            if current != [(round(v.x, 9), round(v.y, 9)) for v in pts]:
+                obj.PreferredEntryPoints = pts
         if obj.KeepToolDown != self.form.keepToolDown.isChecked():
             obj.KeepToolDown = self.form.keepToolDown.isChecked()
         for prop, widget in self._leadCheckboxes():
@@ -1106,12 +1131,84 @@ class LinkingPage(_BarPage):
         _qty_set(self.form.maxRampStepdown, obj.MaxRampStepdown.Value)
         _qty_set(self.form.rampClearanceHeight, obj.RampClearanceHeight.Value)
         _qty_set(self.form.outsidePlungeDistance, obj.OutsidePlungeDistance.Value)
+        if hasattr(obj, "PreferredEntryPoints"):
+            self.preferredPoints = list(obj.PreferredEntryPoints)
+            self._showPreferred()
         self.form.keepToolDown.setChecked(obj.KeepToolDown)
         for prop, widget in self._leadCheckboxes():
             widget.setChecked(getattr(obj, prop))
         for prop, widget in self._leadQuantities():
             _qty_set(widget, getattr(obj, prop).Value)
         self.updateRampFieldsEnabled(obj)
+
+    # -- Preferred Lead-In Positions ----------------------------------------------------------
+    def _showPreferred(self):
+        pts = getattr(self, "preferredPoints", [])
+        if not pts:
+            self.form.preferredInfo.setText(
+                translate("CamStudio_Pocket", "None: each pass starts where FreeCAD starts it.")
+            )
+            return
+        scale = 25.4 if FreeCAD.Units.Quantity(1.0, FreeCAD.Units.Length).getUserPreferred()[2] == "in" else 1.0
+        unit = "in" if scale != 1.0 else "mm"
+        self.form.preferredInfo.setText(
+            "; ".join("(%.3f, %.3f) %s" % (p.x / scale, p.y / scale, unit) for p in pts)
+        )
+
+    def _pickPreferred(self):
+        """Wait for one left-click in the 3D view and add the point under it (on the part if
+        the click hits it, else in the view plane). Uses the view's own mouse callback --
+        Draft's Snapper.getPoint opens its own task dialog, which destroys this one."""
+        import FreeCADGui
+
+        view = FreeCADGui.ActiveDocument.ActiveView if FreeCADGui.ActiveDocument else None
+        if view is None or getattr(self, "_pickCallback", None) is not None:
+            return
+
+        def onClick(info):
+            if info.get("Button") != "BUTTON1" or info.get("State") != "DOWN":
+                return
+            pos = info.get("Position")
+            hit = view.getObjectInfo(pos)
+            if hit:
+                point = FreeCAD.Vector(hit["x"], hit["y"], hit["z"])
+            else:
+                point = view.getPoint(*pos)
+            view.removeEventCallback("SoMouseButtonEvent", self._pickCallback)
+            self._pickCallback = None
+            self._addPreferred(point)
+
+        self._pickCallback = view.addEventCallback("SoMouseButtonEvent", onClick)
+        self.form.preferredInfo.setText(
+            translate("CamStudio_Pocket", "Click a point in the 3D view...")
+        )
+
+    def cleanupPage(self, obj):
+        # Don't leave a pick waiting after the dialog closes.
+        import FreeCADGui
+
+        if getattr(self, "_pickCallback", None) is not None and FreeCADGui.ActiveDocument:
+            try:
+                FreeCADGui.ActiveDocument.ActiveView.removeEventCallback(
+                    "SoMouseButtonEvent", self._pickCallback
+                )
+            except Exception:
+                pass
+            self._pickCallback = None
+
+    def _addPreferred(self, point, _info=None):
+        if point is None:
+            return
+        self.preferredPoints = list(getattr(self, "preferredPoints", [])) + [
+            FreeCAD.Vector(point.x, point.y, 0)
+        ]
+        self._showPreferred()
+        self.pageGetFields()
+
+    def _clearPreferred(self):
+        self.preferredPoints = []
+        self._showPreferred()
+        self.pageGetFields()
 
     def getSignalsForUpdate(self, obj):
         return [

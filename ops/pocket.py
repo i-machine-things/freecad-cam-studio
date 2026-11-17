@@ -236,6 +236,17 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             # Default: follow Clearance Height, i.e. exactly FreeCAD's own behavior until
             # the user sets it. An expression, like the other heights, so it stays in step.
             obj.setExpression("RetractHeight", "ClearanceHeight")
+        if not hasattr(obj, "PreferredEntryPoints"):
+            obj.addProperty(
+                "App::PropertyVectorList",
+                "PreferredEntryPoints",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Preferred Lead-In Positions: each pass is entered at its point nearest these "
+                    "(XY). Empty = where FreeCAD starts each ring",
+                ),
+            )
         if not hasattr(obj, "OutsidePlungeDistance"):
             obj.addProperty(
                 "App::PropertyDistance",
@@ -569,6 +580,10 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
 
         if hasattr(obj, "RetractHeight"):
             self._applyRetractHeight(obj)
+
+        # Before leads / ramps / outside entries, which all work from the entry points.
+        if getattr(obj, "PreferredEntryPoints", None):
+            self._applyPreferredEntries(obj)
 
         # Leads first, then the ramp, as Fusion allows both at once: the lead-in moves the
         # plunge out to the lead's outer end, and the helix then descends around *that*
@@ -1226,6 +1241,150 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             moves.append(self._leadArc((jx, jy), (end.x, end.y), end.z, lead, feed))
         newCmds[plungeIdx + 1 : plungeIdx + 1] = moves
         return newCmds
+
+    # -- Preferred Lead-In Positions -----------------------------------------------------
+    def _applyPreferredEntries(self, obj):
+        """Fusion's Preferred Lead-In Positions. Every closed ring entered by a plunge is
+        restarted at its point nearest the closest preferred position: the ring is split
+        there and rotated, so it is the same loop in the same direction, only starting
+        elsewhere; the plunge (and the rapids above it) move to the new start. Ring order is
+        unchanged. A ring that isn't a clean closed loop of G1/G2/G3 moves at one height is
+        left as it is."""
+        targets = [(v.x, v.y) for v in obj.PreferredEntryPoints]
+        cmds = list(obj.Path.Commands)
+        changed = False
+        for plungeIdx, start, end in reversed(self._entryPlunges(cmds)):
+            loop = self._closedLoopAfter(cmds, plungeIdx, end)
+            if loop is None:
+                continue
+            first, last = loop
+            target = min(targets, key=lambda t: (t[0] - end.x) ** 2 + (t[1] - end.y) ** 2)
+            rotated = self._restartLoop(cmds, first, last, end, target)
+            if rotated is None:
+                continue
+            newStart, newMoves = rotated
+            moved = self._movePlunge(cmds, plungeIdx, start, newStart[0], newStart[1])
+            if moved is None:
+                continue
+            moved[first : last + 1] = newMoves
+            cmds = moved
+            changed = True
+        if changed:
+            obj.Path = Path.Path(cmds)
+
+    def _closedLoopAfter(self, cmds, plungeIdx, end):
+        """(first, last) command indices of the closed loop that starts right after the
+        plunge landing at `end` and returns to it at the same height, or None."""
+        x, y, z = end.x, end.y, end.z
+        i = plungeIdx + 1
+        while i < len(cmds):
+            cmd = cmds[i]
+            if cmd.Name not in ("G1", "G01", "G2", "G02", "G3", "G03"):
+                return None
+            p = cmd.Parameters
+            nx, ny, nz = p.get("X", x), p.get("Y", y), p.get("Z", z)
+            if abs(nz - end.z) > 1e-9:
+                return None
+            x, y = nx, ny
+            if i > plungeIdx + 1 and abs(x - end.x) < 1e-6 and abs(y - end.y) < 1e-6:
+                return plungeIdx + 1, i
+            i += 1
+        return None
+
+    @staticmethod
+    def _closestOnMove(cmd, ax, ay, tx, ty):
+        """(distance, (x, y), fraction-or-angle data) of the point on move `cmd` from (ax, ay)
+        closest to (tx, ty)."""
+        p = cmd.Parameters
+        bx, by = p.get("X", ax), p.get("Y", ay)
+        if cmd.Name in ("G2", "G02", "G3", "G03") and ("I" in p or "J" in p):
+            cx, cy = ax + p.get("I", 0.0), ay + p.get("J", 0.0)
+            r = math.hypot(ax - cx, ay - cy)
+            a0 = math.atan2(ay - cy, ax - cx)
+            a1 = math.atan2(by - cy, bx - cx)
+            ccw = cmd.Name in ("G3", "G03")
+            sweep = (a1 - a0) % (2 * math.pi) if ccw else -((a0 - a1) % (2 * math.pi))
+            if abs(sweep) < 1e-12:
+                sweep = 2 * math.pi if ccw else -2 * math.pi
+            at = math.atan2(ty - cy, tx - cx)
+            rel = (at - a0) % (2 * math.pi) if ccw else -((a0 - at) % (2 * math.pi))
+            if (ccw and rel > sweep) or (not ccw and rel < sweep):
+                # outside the arc: nearest end
+                da = math.hypot(tx - ax, ty - ay)
+                db = math.hypot(tx - bx, ty - by)
+                rel = 0.0 if da <= db else sweep
+            px, py = cx + r * math.cos(a0 + rel), cy + r * math.sin(a0 + rel)
+            return math.hypot(tx - px, ty - py), (px, py), (cx, cy)
+        dx, dy = bx - ax, by - ay
+        L2 = dx * dx + dy * dy
+        t = 0.0 if L2 < 1e-18 else max(0.0, min(1.0, ((tx - ax) * dx + (ty - ay) * dy) / L2))
+        px, py = ax + dx * t, ay + dy * t
+        return math.hypot(tx - px, ty - py), (px, py), None
+
+    def _restartLoop(self, cmds, first, last, start, target):
+        """The loop cmds[first..last] (starting and ending at `start`), restarted at its point
+        nearest `target`: ((x, y), new move commands), or None if it already starts there."""
+        z = start.z
+        best = None
+        x, y = start.x, start.y
+        for i in range(first, last + 1):
+            d, point, center = self._closestOnMove(cmds[i], x, y, target[0], target[1])
+            if best is None or d < best[0] - 1e-9:
+                best = (d, i, point, center, (x, y))
+            p = cmds[i].Parameters
+            x, y = p.get("X", x), p.get("Y", y)
+        _d, k, (nx, ny), center, (ax, ay) = best
+        if abs(nx - start.x) < 1e-6 and abs(ny - start.y) < 1e-6:
+            return None
+        cmd = cmds[k]
+        p = dict(cmd.Parameters)
+        bx, by = p.get("X", ax), p.get("Y", ay)
+
+        def piece(fromXY, toXY):
+            params = {kk: v for kk, v in p.items() if kk not in ("X", "Y", "Z", "I", "J", "K")}
+            params.update({"X": toXY[0], "Y": toXY[1], "Z": z})
+            if center is not None:
+                params["I"], params["J"] = center[0] - fromXY[0], center[1] - fromXY[1]
+            return Path.Command(cmd.Name, params)
+
+        # Feeds are modal and only written when they change; after rotation a move could
+        # inherit the plunge's feed. Give every move the feed it ran at in the original order.
+        feedAt, f = {}, None
+        for j in range(first - 1, -1, -1):
+            if "F" in cmds[j].Parameters and cmds[j].Name in ("G1", "G01", "G2", "G02", "G3", "G03"):
+                f = cmds[j].Parameters["F"]
+                break
+        for j in range(first, last + 1):
+            f = cmds[j].Parameters.get("F", f)
+            feedAt[j] = f
+        p.pop("F", None)
+        if feedAt.get(k) is not None:
+            p["F"] = feedAt[k]
+
+        def full(c, j):
+            q = dict(c.Parameters)
+            q.setdefault("Z", z)
+            if feedAt.get(j) is not None:
+                q["F"] = feedAt[j]
+            return Path.Command(c.Name, q)
+
+        tail, head = [], []
+        if math.hypot(bx - nx, by - ny) > 1e-6:
+            tail.append(piece((nx, ny), (bx, by)))
+        tail += [full(cmds[j], j) for j in range(k + 1, last + 1)]
+        head = [full(cmds[j], j) for j in range(first, k)]
+        if math.hypot(nx - ax, ny - ay) > 1e-6:
+            head.append(piece((ax, ay), (nx, ny)))
+        # Moves after the original start keep their (modal) X/Y; give every move explicit
+        # X/Y so the rotated order doesn't depend on what came before.
+        moves, x, y = [], start.x, start.y
+        for c in tail + head:
+            q = dict(c.Parameters)
+            q.setdefault("X", x)
+            q.setdefault("Y", y)
+            x, y = q["X"], q["Y"]
+            moves.append(Path.Command(c.Name, q))
+        return (nx, ny), moves
 
     # -- Plunge Outside Stock -------------------------------------------------------------
     OUTSIDE_GAP = 0.5  # mm: minimum gap between the cutter and an area's edge

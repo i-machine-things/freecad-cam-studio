@@ -403,7 +403,8 @@ Selected contour(s)) and an **Offset**.
 | Ramping Angle, Maximum Ramp Stepdown, Helical Ramp Diameter, Minimum Ramp Diameter | Have | |
 | Ramp Clearance Height | Have | `RampClearanceHeight`, default 0.100 in as in the capture. The tool rapids down to this far above the stock top (or Start Depth, if higher), then ramps from there instead of spiralling down from Safe Height at plunge feed |
 | Ramp Radial Clearance | Missing | Not in any earlier list |
-| Positions: Predrill Positions, Preferred Lead-In Positions, Exit Positions | Missing | Point selections |
+| Preferred Lead-In Positions | Have | Linking > Positions, Select (click points in the 3D view) / Clear. Every ring entered by a plunge is restarted at its point nearest the closest preferred position (split and rotated: same loop, same direction, explicit feeds); ring order unchanged; entries, leads, helix and Plunge Outside Stock all follow. With Outside in + Plunge Outside Stock, an open pocket is entered from its open side (Allan's case). Replaces FreeCAD's Use Start Point checkbox, which had no effect on this pocket except with Minimize Travel, where it re-sorted the whole path |
+| Predrill Positions, Exit Positions | Missing | Point selections |
 
 ### Dialog layout (built 2026-11-15)
 FreeCAD's stacked task-panel bars, lined up with Fusion's tabs:
