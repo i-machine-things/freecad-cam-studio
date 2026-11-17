@@ -1,0 +1,1670 @@
+"""CAM Studio's own Pocket operation Proxy.
+
+Subclasses Path.Op.PocketShape.ObjectPocket (never patches it) to add
+two Fusion 2D Pocket options (docs/spec/02-2d-milling-operations.md)
+that FreeCAD's stock PocketShape operation has no property/behavior for
+at all:
+
+1. "Axial Stock to Leave" -- radial stock-to-leave already exists
+   upstream as `ExtraOffset`; this adds the missing Z-axis half of the
+   pair by hooking `_customDepthParams`, an officially documented
+   extension point in Path.Op.Area.ObjectOp.
+2. "Ramp" entry (Fusion's Linking tab): FreeCAD's area-clearing engine
+   has no ramp/helix-entry support at all (confirmed by reading
+   Path.Op.Area.py -- its one `leadIn` reference is an unrelated
+   hardcoded internal value). Implemented here as a post-process step:
+   let the normal, documented pipeline build the correct straight-plunge
+   toolpath first (`super().execute(obj)` -- Path.Op.Base.execute's own
+   docstring says "do not overwrite!", so we never replace its body,
+   only wrap it), then replace the *first* straight vertical plunge with
+   a helix descent, generated as directly-sampled G1 segments (explicit
+   parametric circle-while-descending math, not Part.makeHelix +
+   Path.Geom.cmdsForEdge -- that combination's edge-direction/reversal
+   semantics produced a genuinely backwards, garbled path in testing;
+   direct sampling is simpler to get right and to verify by inspection).
+
+   V1 scope, stated plainly rather than overclaimed: only the operation's
+   very first plunge (entry into un-machined stock) is ramped. Later
+   retract/re-plunge cycles within the same pass (e.g. between
+   concentric offset rings) are usually re-entering already-cleared air,
+   not solid material, and are deliberately left as straight plunges for
+   now -- per-level/per-region ramping is a tracked follow-up, see
+   docs/ROADMAP.md.
+3. "Lead-In"/"Lead-Out" (also Fusion's Linking tab): a separate feature
+   from ramping -- it moves the plunge off the true path to the start of
+   a lead (an optional straight leg, then an optional arc tangent to the
+   first cut), so the tool is already moving in the cut direction, at
+   cutting feed, before it reaches full engagement (mirror at the tail
+   for lead-out). Works together with a Helix ramp: the helix descends at
+   the lead's outer end (see execute()). See _applyLeadInOut's
+   docstring for the full V1 scope statement.
+"""
+
+import math
+
+import FreeCAD
+import Part
+from PySide.QtCore import QT_TRANSLATE_NOOP
+
+import Path
+import Path.Op.Base as PathOp
+import Path.Op.PocketBase as PathPocketBase
+import Path.Op.PocketShape as PathPocketShape
+
+
+class ObjectPocket(PathPocketShape.ObjectPocket):
+    # Hard ceilings on helix ramp generation regardless of requested RampAngle/MaxRampStepdown
+    # -- see _buildHelixRampCommands. MAX_RAMP_REVOLUTIONS bounds the actual spiral geometry
+    # (the thing that matters physically); MAX_RAMP_SEGMENTS is a secondary sample-count safety
+    # net that should rarely bind once revolutions are already bounded. 50 revolutions is
+    # already far more than any real single-entry ramp needs.
+    RAMP_TYPES = ["Plunge", "Plunge Outside Stock", "Helix"]
+    HELIX_DEFAULT_DIAMETERS = 1.0  # auto helix diameter, x tool diameter (Allan)
+    MAX_RAMP_REVOLUTIONS = 50
+    MAX_RAMP_SEGMENTS = 2000
+
+    # Slack (mm) allowed when checking an added entry/exit move's swept cutter area against
+    # the pocket -- see _sweptAreaFits. The stock toolpath itself legitimately runs the
+    # cutter tangent to the walls, so an exact-radius check would reject on numerical noise.
+    FIT_TOLERANCE = 0.01
+    # Directions (radians, from the plunge point toward the helix center) tried in order
+    # when placing a helix ramp. pi first: the original fixed placement, so a helix that
+    # already fit keeps exactly the same output.
+    HELIX_CENTER_DIRECTIONS = tuple(
+        math.pi * k / 4.0 for k in (4, 0, 2, 6, 3, 5, 1, 7)
+    )
+
+    def areaOpFeatures(self, obj):
+        # PathPocketShape.ObjectPocket.areaOpFeatures calls super(self.__class__, self) --
+        # with self.__class__ being OUR subclass, that resolves to the same bound method on
+        # every recursive call (self never changes), causing infinite recursion two levels
+        # deep. Call PocketBase's implementation directly instead of going through
+        # PocketShape's broken super() chain. Not a core patch -- just not inheriting a
+        # buggy one-liner.
+        return PathPocketBase.ObjectPocket.areaOpFeatures(self, obj) | PathOp.FeatureLocations
+
+    def initPocketOp(self, obj):
+        super().initPocketOp(obj)
+        # 2D Offset Roughing always clears with concentric offsets -- that's what the
+        # operation is. Pin the upstream pattern choice to Offset (also on restore, for
+        # documents made before this) and make it read-only in the property editor.
+        if hasattr(obj, "ClearingPattern"):
+            if obj.ClearingPattern != "Offset":
+                obj.ClearingPattern = "Offset"
+            obj.setEditorMode("ClearingPattern", 1)
+        if not hasattr(obj, "AxialStockToLeave"):
+            obj.addProperty(
+                "App::PropertyDistance",
+                "AxialStockToLeave",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Material left on the pocket floor (Z axis) for a later finishing pass",
+                ),
+            )
+            obj.AxialStockToLeave = 0
+        if not hasattr(obj, "RampType"):
+            obj.addProperty(
+                "App::PropertyEnumeration",
+                "RampType",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property", "How the tool enters the material for the first plunge"
+                ),
+            )
+            obj.RampType = self.RAMP_TYPES
+            obj.RampType = "Plunge"
+        elif list(obj.getEnumerationsOfProperty("RampType")) != list(self.RAMP_TYPES):
+            # Older documents: add ramp types built since, keeping the current choice.
+            current = obj.RampType
+            obj.RampType = self.RAMP_TYPES
+            obj.RampType = current if current in self.RAMP_TYPES else "Plunge"
+        if not hasattr(obj, "RampAngle"):
+            obj.addProperty(
+                "App::PropertyAngle",
+                "RampAngle",
+                "Pocket",
+                QT_TRANSLATE_NOOP("App::Property", "Helix ramp descent angle"),
+            )
+            obj.RampAngle = 2.0
+        if not hasattr(obj, "HelicalRampDiameter"):
+            obj.addProperty(
+                "App::PropertyDistance",
+                "HelicalRampDiameter",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Target diameter of the helix ramp entry. 0 = auto (1 x tool diameter)",
+                ),
+            )
+            obj.HelicalRampDiameter = 0
+        if not hasattr(obj, "MinimumRampDiameter"):
+            obj.addProperty(
+                "App::PropertyDistance",
+                "MinimumRampDiameter",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Smallest acceptable helix ramp diameter -- reduce HelicalRampDiameter "
+                    "toward this for pockets too small to fit the default",
+                ),
+            )
+            obj.MinimumRampDiameter = 0
+        if not hasattr(obj, "MaxRampStepdown"):
+            obj.addProperty(
+                "App::PropertyDistance",
+                "MaxRampStepdown",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Maximum descent per helix revolution. 0 = unconstrained (RampAngle alone "
+                    "determines it)",
+                ),
+            )
+            obj.MaxRampStepdown = 0
+        # Feed & Speed, per operation (as in Fusion): copied from the tool controller when
+        # the op is created or its tool changes (loadFeedsFromTool), then the op's own.
+        added = False
+        for name, ptype, doc in (
+            ("SpindleSpeed", "App::PropertyFloat", "Spindle speed (rpm) for this operation"),
+            ("RampSpindleSpeed", "App::PropertyFloat", "Spindle speed (rpm) while ramping"),
+            ("CuttingFeedrate", "App::PropertySpeed", "Feedrate for cutting moves"),
+            ("LeadInFeedrate", "App::PropertySpeed", "Feedrate for the Lead-In move"),
+            ("LeadOutFeedrate", "App::PropertySpeed", "Feedrate for the Lead-Out move"),
+            ("RampFeedrate", "App::PropertySpeed", "Feedrate while ramping (helix)"),
+            ("PlungeFeedrate", "App::PropertySpeed", "Feedrate for straight plunges"),
+        ):
+            if not hasattr(obj, name):
+                obj.addProperty(ptype, name, "Feed & Speed", QT_TRANSLATE_NOOP("App::Property", doc))
+                added = True
+        # Fusion's Multiple Depths options (see depthLevels). Separate from the feeds above.
+        if not hasattr(obj, "UseMultipleDepths"):
+            obj.addProperty(
+                "App::PropertyBool", "UseMultipleDepths", "Depth",
+                QT_TRANSLATE_NOOP("App::Property", "Cut in several depth levels. Off: one pass at the bottom"),
+            )
+            obj.UseMultipleDepths = True
+        if not hasattr(obj, "UseEvenStepdowns"):
+            obj.addProperty(
+                "App::PropertyBool", "UseEvenStepdowns", "Depth",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Space the roughing levels evenly, each at most the Step Down, instead of "
+                    "full steps plus a thinner last one",
+                ),
+            )
+            obj.UseEvenStepdowns = True  # Fusion's default
+        if not hasattr(obj, "FinishingStepdowns"):
+            obj.addProperty(
+                "App::PropertyInteger", "FinishingStepdowns", "Depth",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Number of finishing levels at the bottom, each Finish Depth deep. 0 = none",
+                ),
+            )
+            # Keep an existing op's toolpath: FreeCAD's own Finish Depth meant one finishing level.
+            finish = getattr(obj, "FinishDepth", None)
+            obj.FinishingStepdowns = 1 if finish is not None and finish.Value > 0 else 0
+        if not hasattr(obj, "ChipThinning"):
+            # Separate from the feeds above: adding it to an older document must not count as
+            # "feeds missing" and re-seed feeds the user already set.
+            obj.addProperty(
+                "App::PropertyBool",
+                "ChipThinning",
+                "Feed & Speed",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Raise the cutting feed when the stepover is under half the tool diameter, "
+                    "so the actual chip thickness stays at the chipload",
+                ),
+            )
+            obj.ChipThinning = False
+        if added and getattr(obj, "ToolController", None) is not None:
+            # Restoring a document made before these existed: start from its tool.
+            self.loadFeedsFromTool(obj)
+        if not hasattr(obj, "RetractHeight") and hasattr(obj, "ClearanceHeight"):
+            obj.addProperty(
+                "App::PropertyDistance",
+                "RetractHeight",
+                "Depth",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Height the tool retracts to between passes (Fusion's Retract Height). "
+                    "FreeCAD otherwise retracts to Clearance Height",
+                ),
+            )
+            # Default: follow Clearance Height, i.e. exactly FreeCAD's own behavior until
+            # the user sets it. An expression, like the other heights, so it stays in step.
+            obj.setExpression("RetractHeight", "ClearanceHeight")
+        if not hasattr(obj, "PreferredEntryPoints"):
+            obj.addProperty(
+                "App::PropertyVectorList",
+                "PreferredEntryPoints",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Preferred Lead-In Positions: each pass is entered at its point nearest these "
+                    "(XY). Empty = where FreeCAD starts each ring",
+                ),
+            )
+        if not hasattr(obj, "OutsidePlungeDistance"):
+            obj.addProperty(
+                "App::PropertyDistance",
+                "OutsidePlungeDistance",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Plunge Outside Stock: distance from the area's edge to the tool center at "
+                    "the plunge. 0 = 1.25 x tool diameter",
+                ),
+            )
+            obj.OutsidePlungeDistance = 0
+        if not hasattr(obj, "RampClearanceHeight"):
+            obj.addProperty(
+                "App::PropertyDistance",
+                "RampClearanceHeight",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Height above the top of the material where the ramp starts. The tool "
+                    "rapids down to it, then ramps from there",
+                ),
+            )
+            # Fusion's default as seen in Allan's capture: 0.100 in.
+            obj.RampClearanceHeight = 2.54
+        if not hasattr(obj, "FinishingPasses"):
+            obj.addProperty(
+                "App::PropertyInteger",
+                "FinishingPasses",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Extra wall-finishing passes stepping down from the roughing Stock to "
+                    "Leave to the true wall. 0 = off",
+                ),
+            )
+            obj.FinishingPasses = 0
+        if not hasattr(obj, "FinishFeedrate"):
+            obj.addProperty(
+                "App::PropertySpeed",
+                "FinishFeedrate",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property", "Feedrate for finishing passes. 0 = same as cutting feed"
+                ),
+            )
+            obj.FinishFeedrate = 0
+        # Lead-In and Lead-Out are enabled separately, as in Fusion. An earlier version of
+        # this class had a single combined UseLeadInOut switch -- carry its value over to
+        # both and drop it (this method also runs on document restore).
+        legacyLeads = None
+        if hasattr(obj, "UseLeadInOut"):
+            legacyLeads = bool(obj.UseLeadInOut)
+            obj.removeProperty("UseLeadInOut")
+        for name, doc in (
+            ("UseLeadIn", "Enable the Lead-In (entry) move"),
+            ("UseLeadOut", "Enable the Lead-Out (exit) move"),
+        ):
+            if not hasattr(obj, name):
+                obj.addProperty(
+                    "App::PropertyBool", name, "Pocket", QT_TRANSLATE_NOOP("App::Property", doc)
+                )
+                setattr(obj, name, bool(legacyLeads))
+        for name, doc in (
+            (
+                "LeadInRadius",
+                "Radius of the horizontal Lead-In arc, tangent to the first cut. 0 = no arc",
+            ),
+            (
+                "LeadOutRadius",
+                "Radius of the horizontal Lead-Out arc, tangent to the last cut. 0 = no arc "
+                "(ignored if Same as Lead-In)",
+            ),
+        ):
+            if not hasattr(obj, name):
+                obj.addProperty(
+                    "App::PropertyDistance", name, "Pocket", QT_TRANSLATE_NOOP("App::Property", doc)
+                )
+                setattr(obj, name, 0)
+        for name, doc in (
+            ("LeadInSweepAngle", "Angle the Lead-In arc sweeps through"),
+            ("LeadOutSweepAngle", "Angle the Lead-Out arc sweeps through (ignored if Same as Lead-In)"),
+        ):
+            if not hasattr(obj, name):
+                obj.addProperty(
+                    "App::PropertyAngle", name, "Pocket", QT_TRANSLATE_NOOP("App::Property", doc)
+                )
+                setattr(obj, name, 90.0)
+        for name, doc in (
+            (
+                "LeadInPerpendicular",
+                "Make the straight Lead-In leg square to the lead arc instead of tangent to it",
+            ),
+            (
+                "LeadOutPerpendicular",
+                "Make the straight Lead-Out leg square to the lead arc instead of tangent to it "
+                "(ignored if Same as Lead-In)",
+            ),
+        ):
+            if not hasattr(obj, name):
+                obj.addProperty(
+                    "App::PropertyBool", name, "Pocket", QT_TRANSLATE_NOOP("App::Property", doc)
+                )
+                setattr(obj, name, False)
+        if not hasattr(obj, "LeadInDistance"):
+            obj.addProperty(
+                "App::PropertyDistance",
+                "LeadInDistance",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property", "Length of the straight Lead-In leg ahead of the lead arc"
+                ),
+            )
+            obj.LeadInDistance = 0
+        if not hasattr(obj, "SameAsLeadIn"):
+            obj.addProperty(
+                "App::PropertyBool",
+                "SameAsLeadIn",
+                "Pocket",
+                QT_TRANSLATE_NOOP("App::Property", "Use the Lead-In distance for Lead-Out too"),
+            )
+            obj.SameAsLeadIn = True
+        if not hasattr(obj, "LeadOutDistance"):
+            obj.addProperty(
+                "App::PropertyDistance",
+                "LeadOutDistance",
+                "Pocket",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Length of the straight Lead-Out leg after the lead arc (ignored if Same "
+                    "as Lead-In)",
+                ),
+            )
+            obj.LeadOutDistance = 0
+
+    def areaOpPathParams(self, obj, isHole):
+        # FreeCAD turns CutMode into a fixed loop direction (Climb = counter-clockwise),
+        # whichever way the rings progress. That is climb only when clearing inside-out
+        # (uncut material outside each ring). Clearing outside-in (StartAt = Edge) the uncut
+        # material is inside each ring, so the same direction cuts conventional -- Allan saw
+        # Sideways Compensation come out backward there. Flip the direction for outside-in
+        # so Left / climb really climbs either way.
+        params = super().areaOpPathParams(obj, isHole)
+        if getattr(obj, "StartAt", "Center") == "Edge" and "orientation" in params:
+            params["orientation"] = 1 - params["orientation"]
+        return params
+
+    def _customDepthParams(self, obj, strDep, finDep):
+        axial = getattr(obj, "AxialStockToLeave", None)
+        adjustedFinalDepth = finDep + (axial.Value if axial else 0.0)
+        if not hasattr(obj, "UseMultipleDepths"):
+            return super()._customDepthParams(obj, strDep, adjustedFinalDepth)
+        import PathScripts.PathUtils as PathUtils
+
+        # Same helper upstream uses, given the levels explicitly (its documented user_depths
+        # argument) so Fusion's Multiple Depths options can shape them.
+        levels = self.depthLevels(
+            strDep,
+            adjustedFinalDepth,
+            obj.StepDown.Value,
+            int(getattr(obj, "FinishingStepdowns", 0)),
+            obj.FinishDepth.Value if hasattr(obj, "FinishDepth") else 0.0,
+            bool(obj.UseEvenStepdowns),
+            bool(obj.UseMultipleDepths),
+        )
+        return PathUtils.depth_params(
+            clearance_height=obj.ClearanceHeight.Value,
+            safe_height=obj.SafeHeight.Value,
+            start_depth=strDep,
+            step_down=obj.StepDown.Value,
+            z_finish_step=0.0,
+            final_depth=adjustedFinalDepth,
+            user_depths=levels,
+        )
+
+    @staticmethod
+    def depthLevels(start, final, maxStep, finishCount, finishSize, even, multiple):
+        """Cutting levels, top to bottom, ending at `final` (Fusion's Multiple Depths):
+
+        - multiple off: one level, the bottom.
+        - finishing: the last `finishCount` levels are `finishSize` apart (each takes that
+          much off the floor). They fill at most the whole depth.
+        - roughing: from `start` down to the top of the finishing zone in steps of at most
+          `maxStep` -- evenly spaced if `even`, else full steps from the top with a thinner
+          last one (FreeCAD's own behavior).
+        """
+        eps = 1e-9
+        total = start - final
+        if total <= eps:
+            return [final]
+        if not multiple:
+            return [final]
+        levels = []
+        finishCount = max(0, int(finishCount))
+        finishSize = max(0.0, float(finishSize))
+        if finishCount and finishSize > eps:
+            finishCount = min(finishCount, int(math.floor(total / finishSize + eps)) or 1)
+            finishTop = final + finishCount * finishSize
+        else:
+            finishCount, finishTop = 0, final
+        maxStep = abs(maxStep)
+        roughDepth = start - finishTop
+        if roughDepth > eps:
+            if maxStep <= eps:
+                rough = [finishTop]
+            elif even:
+                n = int(math.ceil(roughDepth / maxStep - eps))
+                rough = [start - roughDepth * i / n for i in range(1, n + 1)]
+            else:
+                rough, z = [], start
+                while z - maxStep > finishTop + eps:
+                    z -= maxStep
+                    rough.append(z)
+                rough.append(finishTop)
+            levels += rough
+        levels += [finishTop - finishSize * i for i in range(1, finishCount + 1)]
+        # Clean up rounding: strictly descending, last exactly at the bottom.
+        out = []
+        for z in levels:
+            if not out or z < out[-1] - 1e-7:
+                out.append(z)
+        out[-1] = final
+        return out
+
+    def areaOpShapes(self, obj):
+        # _customDepthParams (above) only adjusts the Z-level *iteration list* used to slice
+        # the removal shape into passes -- PocketShape.areaOpShapes itself reads
+        # obj.FinalDepth.Value directly to build that removal shape's actual geometry
+        # (translate/extrude), completely independent of _customDepthParams. Without this,
+        # AxialStockToLeave would adjust the depth-stepping metadata but never actually change
+        # the real cut depth -- caught by checking the generated toolpath's Z values, not just
+        # that _customDepthParams returned the right number.
+        #
+        # FinalDepth is normally expression-driven (bound to OpFinalDepth), but a direct
+        # assignment still works and is safely overwritten back by the expression on the next
+        # real recompute -- verified empirically. Restore it immediately after this synchronous
+        # call regardless, so nothing outside this method ever observes the adjusted value.
+        axial = getattr(obj, "AxialStockToLeave", None)
+        if not axial or axial.Value == 0:
+            return super().areaOpShapes(obj)
+        original = obj.FinalDepth.Value
+        obj.FinalDepth = original + axial.Value
+        try:
+            return super().areaOpShapes(obj)
+        finally:
+            obj.FinalDepth = original
+
+    def loadFeedsFromTool(self, obj):
+        """Fill this op's own Feed & Speed from its defaults: the setup's stock material
+        when it has machining data (cs_materials/library.py: spindle speed from the
+        material's surface speed for this tool's material and diameter; feeds from the
+        chipload -- the tool's own, else the material's table), otherwise the tool
+        controller's values. Fusion
+        fills an operation from the tool's preset for the material the same way.
+
+        Whatever the material can't supply (e.g. no chipload known) stays at the tool
+        controller's value."""
+        tc = getattr(obj, "ToolController", None)
+        if tc is None:
+            return
+        rpm, horiz, vert = tc.SpindleSpeed, tc.HorizFeed.Value, tc.VertFeed.Value
+        defaults = self.materialDefaults(obj)
+        if defaults is not None:
+            rpm = defaults["rpm"]
+            if "cutting" in defaults:
+                horiz = defaults["cutting"] / 60.0
+                vert = defaults["plunge"] / 60.0
+        obj.SpindleSpeed = round(rpm)
+        obj.RampSpindleSpeed = round(rpm)
+        obj.CuttingFeedrate = horiz
+        obj.LeadInFeedrate = horiz
+        obj.LeadOutFeedrate = horiz
+        obj.RampFeedrate = vert
+        obj.PlungeFeedrate = vert
+
+    loadDefaultFeeds = loadFeedsFromTool
+
+    def materialDefaults(self, obj):
+        """cs_materials.library.defaultFeedsFor this op's tool in its setup's stock material
+        (FreeCAD's Job Stock material), or None if the stock has no machining data."""
+        import PathScripts.PathUtils as PathUtils
+        from cs_materials import library
+
+        job = PathUtils.findParentJob(obj)
+        tc = getattr(obj, "ToolController", None)
+        if job is None or tc is None:
+            return None
+        return library.defaultFeedsFor(job, tc.Tool)
+
+    @staticmethod
+    def chipThinningFactor(obj):
+        """Radial chip thinning: with a radial engagement (stepover) ae under half the tool
+        diameter D, a chip is thinner than the feed per tooth by
+            RCTF = sqrt(1 - (1 - 2*ae/D)^2),
+        so the cutting feed is divided by RCTF to keep the real chip thickness at the
+        chipload. 1.0 when off or ae >= D/2. ae is the pocket's StepOver (% of D); note the
+        engagement is higher than that in corners and on the first, full-width cut."""
+        if not getattr(obj, "ChipThinning", False):
+            return 1.0
+        ratio = max(0.0, min(1.0, float(getattr(obj, "StepOver", 100)) / 100.0))
+        if ratio >= 0.5 or ratio <= 0:
+            return 1.0
+        return 1.0 / math.sqrt(1.0 - (1.0 - 2.0 * ratio) ** 2)
+
+    def opExecute(self, obj, *args, **kwargs):
+        # Base.execute has just read the tool controller's feeds into self.horizFeed /
+        # self.vertFeed; replace them with this op's own before the toolpath is generated,
+        # so every move upstream emits carries the op's feeds.
+        if hasattr(obj, "CuttingFeedrate"):
+            self.horizFeed = obj.CuttingFeedrate.Value * self.chipThinningFactor(obj)
+            self.vertFeed = obj.PlungeFeedrate.Value
+        return super().opExecute(obj, *args, **kwargs)
+
+    def execute(self, obj):
+        # Path.Op.Base.execute's own docstring says "do not overwrite!" -- let it build the
+        # correct, normal (straight-plunge) toolpath first, then post-process the result.
+        # Base.execute returns early *without* assigning obj.Path (missing/zero tool
+        # controller, invalid base/stock) or with a placeholder path (inactive op). In all of
+        # those cases it never reaches `self.commandlist = []`, so obj.Path is not a fresh
+        # toolpath and must not be post-processed -- re-running the lead/ramp steps on the
+        # previous, already post-processed path would shift and re-insert moves again on
+        # every recompute (CodeRabbit, PR #1).
+        self.commandlist = None
+        result = super().execute(obj)
+        if self.commandlist is None:
+            return result
+
+        finishingPasses = int(getattr(obj, "FinishingPasses", 0))
+        if finishingPasses > 0 and obj.ExtraOffset.Value != 0:
+            self._appendFinishingPasses(obj, finishingPasses)
+
+        if hasattr(obj, "RetractHeight"):
+            self._applyRetractHeight(obj)
+
+        # Before leads / ramps / outside entries, which all work from the entry points.
+        if getattr(obj, "PreferredEntryPoints", None):
+            self._applyPreferredEntries(obj)
+
+        # Leads first, then the ramp, as Fusion allows both at once: the lead-in moves the
+        # plunge out to the lead's outer end, and the helix then descends around *that*
+        # point (its own fit check runs there), so the tool spirals down off the wall and
+        # the lead carries it into the cut at full depth.
+        if getattr(obj, "UseLeadIn", False) or getattr(obj, "UseLeadOut", False):
+            self._applyLeadInOut(obj)
+        rampType = getattr(obj, "RampType", "Plunge")
+        if rampType == "Helix":
+            self._applyHelixRampEntry(obj)
+        elif rampType == "Plunge Outside Stock":
+            self._applyOutsideStockEntries(obj)
+        if hasattr(obj, "SpindleSpeed"):
+            self._applySpindleSpeed(obj)
+        return result
+
+    def _spindleCommand(self, rpm):
+        """M3/M4 S<rpm> in the tool's own direction (or M5 for 0), the same form FreeCAD's
+        tool change emits. None for a tool that doesn't rotate."""
+        direction = self.tool.Proxy.get_spindle_direction().value if self.tool else None
+        if direction not in ("M3", "M4"):
+            return None
+        if rpm <= 0:
+            return Path.Command("M5")
+        return Path.Command(direction, {"S": rpm})
+
+    def _applySpindleSpeed(self, obj):
+        """Per-operation spindle speed. FreeCAD sets the spindle once, at the tool change,
+        from the tool controller. When this op's speed differs, set it at the op's start
+        and put the controller's speed back at its end, so a following op on the same tool
+        still runs at the speed its own tool change implies."""
+        tcSpeed = obj.ToolController.SpindleSpeed
+        if abs(obj.SpindleSpeed - tcSpeed) < 1e-9:
+            return
+        start = self._spindleCommand(obj.SpindleSpeed)
+        restore = self._spindleCommand(tcSpeed)
+        if start is None:
+            return
+        cmds = list(obj.Path.Commands)
+        # After the op's leading comment lines, before any motion.
+        i = 0
+        while i < len(cmds) and cmds[i].Name.startswith("("):
+            i += 1
+        cmds.insert(i, start)
+        if restore is not None:
+            cmds.append(restore)
+        obj.Path = Path.Path(cmds)
+
+    def _appendFinishingPasses(self, obj, count):
+        """Fusion's "Finishing Passes": extra wall-cleanup passes stepping the radial Stock
+        to Leave down from its roughing value to 0 (the true wall), using the side of the
+        tool. V1 scope: linear stepdown, optional single shared finish feedrate override.
+        Not yet covered -- tracked in docs/ROADMAP.md: "Leads on all Finishing Passes",
+        "Finishing Overlap", "Repeat Finishing Pass", and a distinct per-pass Stepover (this
+        reuses the roughing StepOver for each finishing pass's own internal geometry, which
+        doesn't matter much since each finishing pass is a single near-wall ring).
+
+        Implementation: re-run the exact same, already-correct execute() pipeline once per
+        pass with ExtraOffset temporarily stepped down -- not a new toolpath algorithm --
+        and concatenate the resulting commands. obj.ExtraOffset is restored to its original
+        (roughing) value before returning, the same restore-after pattern areaOpShapes uses
+        for AxialStockToLeave.
+
+        KNOWN INEFFICIENCY (flagged in PR #1 review, "Heavy lift" -- correctly deferred, not a
+        correctness bug): each pass reruns the *entire* clearing pattern at its new offset, not
+        just the remaining wall band. On a large pocket this means repeated full-area travel at
+        finish feed for every pass instead of a single boundary-only profile pass per step. The
+        output is correct, just slower than an ideal implementation that computed just the
+        remaining wall band/boundary profile directly -- tracked in docs/ROADMAP.md as a real
+        follow-up, not something to silently leave undocumented.
+        """
+        roughingCommands = list(obj.Path.Commands)
+        originalOffset = obj.ExtraOffset.Value
+        finishFeed = getattr(obj, "FinishFeedrate", None)
+        finishFeedValue = finishFeed.Value if finishFeed else 0.0
+
+        allCommands = list(roughingCommands)
+        try:
+            for i in range(1, count + 1):
+                obj.ExtraOffset = originalOffset * (1 - i / count)
+                super().execute(obj)
+                passCommands = list(obj.Path.Commands)
+                if finishFeedValue > 0:
+                    passCommands = [self._withFeedOverride(c, finishFeedValue) for c in passCommands]
+                allCommands += passCommands
+        finally:
+            obj.ExtraOffset = originalOffset
+
+        obj.Path = Path.Path(allCommands)
+        obj.CycleTime = PathOp.getCycleTimeEstimate(obj)
+        self.job.Proxy.getCycleTime()
+
+    def _withFeedOverride(self, cmd, feed):
+        if cmd.Name not in ("G1", "G01", "G2", "G02", "G3", "G03"):
+            return cmd
+        params = dict(cmd.Parameters)
+        params["F"] = feed
+        return Path.Command(cmd.Name, params)
+
+    def _applyRetractHeight(self, obj):
+        """Fusion's Retract Height. FreeCAD's generator retracts to Clearance Height between
+        passes and travels across at that height (verified in its output). Lower those
+        between-pass retracts and travel moves to RetractHeight; the first approach and the
+        final retract (before the first and after the last cutting move) stay at Clearance.
+
+        Clamped to stay at or above Feed Height (FreeCAD Safe Height), the stock top and
+        the Top Height, so a between-pass rapid can never run through material, and at or
+        below Clearance Height."""
+        clearance = obj.ClearanceHeight.Value
+        wanted = obj.RetractHeight.Value
+        floor = max(obj.SafeHeight.Value, obj.StartDepth.Value)
+        stockTop = getattr(obj, "OpStockZMax", None)
+        if stockTop is not None:
+            floor = max(floor, stockTop.Value)
+        retract = min(clearance, max(wanted, floor))
+        if retract < wanted - 1e-6 or retract > wanted + 1e-6:
+            Path.Log.warning(
+                "%s: Retract Height %.3f mm is outside the safe range (Feed Height / stock "
+                "top %.3f mm up to Clearance Height %.3f mm); using %.3f mm.\n"
+                % (obj.Label, wanted, floor, clearance, retract)
+            )
+        if abs(retract - clearance) < 1e-6:
+            return
+        cmds = list(obj.Path.Commands)
+        cutting = [i for i, c in enumerate(cmds) if c.Name in ("G1", "G01", "G2", "G02", "G3", "G03")]
+        if not cutting:
+            return
+        changed = False
+        for i in range(cutting[0] + 1, cutting[-1]):
+            c = cmds[i]
+            z = c.Parameters.get("Z")
+            if c.Name in ("G0", "G00") and z is not None and abs(z - clearance) < 1e-6:
+                cmds[i] = Path.Command(c.Name, dict(c.Parameters, Z=retract))
+                changed = True
+        if changed:
+            obj.Path = Path.Path(cmds)
+            obj.CycleTime = PathOp.getCycleTimeEstimate(obj)
+            self.job.Proxy.getCycleTime()
+
+    @staticmethod
+    def _withFeed(params, feed):
+        """Add F to `params` only when the tool controller actually has a feed set. The
+        stock generator omits F entirely for an unset (0) feed; emitting an explicit F0 on
+        just our added moves would be inconsistent with their neighbors and is a hard
+        error or a stall on some controllers."""
+        if feed and feed > 0:
+            params["F"] = feed
+        return params
+
+    def _applyHelixRampEntry(self, obj):
+        """Replace every straight plunge with a helix ramp (Allan: all plunges, not only the
+        first). Each one is fitted on its own (_fitHelixRamp, walls and islands at that
+        level); a plunge where no helix fits stays a plunge, reported in one warning.
+
+        Ramp Clearance Height counts from the top of the material at that plunge: the
+        previous cut level above it, or the stock top (Start Depth if higher) for the first
+        level -- so later levels don't spiral down through air they already cleared."""
+        if not obj.Path or not obj.Path.Commands:
+            return
+        cmds = list(obj.Path.Commands)
+        plunges = self._entryPlunges(cmds)
+        if not plunges:
+            return
+        stockTop = obj.StartDepth.Value
+        opStockTop = getattr(obj, "OpStockZMax", None)
+        if opStockTop is not None:
+            stockTop = max(stockTop, opStockTop.Value)
+        levels = sorted({round(end.z, 6) for _i, _s, end in plunges})
+        clearance = getattr(obj, "RampClearanceHeight", None)
+        clearance = max(0.0, clearance.Value) if clearance is not None else None
+        self.rampFeed = obj.RampFeedrate.Value if hasattr(obj, "RampFeedrate") else self.vertFeed
+        rampRpm = getattr(obj, "RampSpindleSpeed", None)
+        opRpm = getattr(obj, "SpindleSpeed", None)
+        spindleSwitch = (
+            rampRpm is not None and rampRpm > 0 and opRpm is not None and abs(rampRpm - opRpm) > 1e-9
+        )
+        kept, changed = 0, False
+        for plungeIdx, start, end in reversed(plunges):
+            rapidTo = None
+            if clearance is not None:
+                above = [z for z in levels if z > round(end.z, 6) + 1e-6]
+                materialTop = min(above) if above else stockTop
+                rampTop = materialTop + clearance
+                if end.z + 1e-6 < rampTop < start.z - 1e-6:
+                    rapidTo = rampTop
+                    start = FreeCAD.Vector(start.x, start.y, rampTop)
+            placement = self._fitHelixRamp(obj, end)
+            if placement is None:
+                kept += 1
+                continue
+            radius, centerAngle = placement
+            rampCmds = self._buildHelixRampCommands(
+                start, end, radius, obj.RampAngle.Value, obj.MaxRampStepdown.Value, centerAngle
+            )
+            if not rampCmds:
+                kept += 1
+                continue
+            if rapidTo is not None:
+                rampCmds = [Path.Command("G0", {"Z": rapidTo})] + rampCmds
+            # Ramp Spindle Speed: switch for the helix only, then back to the op's speed.
+            if spindleSwitch:
+                during, after = self._spindleCommand(rampRpm), self._spindleCommand(opRpm)
+                if during is not None and after is not None:
+                    rampCmds = [during] + rampCmds + [after]
+            cmds[plungeIdx : plungeIdx + 1] = rampCmds
+            changed = True
+        if kept:
+            Path.Log.warning(
+                "%s: %d plunge%s kept straight -- no helix between the Helical Ramp Diameter "
+                "and the Minimum Ramp Diameter fits there (a ring starting in a corner never "
+                "fits one; elsewhere, reduce the ramp diameters).\n"
+                % (obj.Label, kept, "" if kept == 1 else "s")
+            )
+        if changed:
+            obj.Path = Path.Path(cmds)
+            # The cycle-time estimate was computed by super().execute(obj) for the straight
+            # plunges -- recompute it, and the Job total, as the base execute() does.
+            obj.CycleTime = PathOp.getCycleTimeEstimate(obj)
+            self.job.Proxy.getCycleTime()
+
+    def _helixRampDiameters(self, obj):
+        """Candidate helix diameters, largest (preferred) first: HelicalRampDiameter (0 =
+        auto, 1 x tool diameter -- Allan's default), then -- only if MinimumRampDiameter is set and smaller --
+        evenly stepped down to MinimumRampDiameter. A minimum larger than the target raises
+        the target to it, as before."""
+        target = obj.HelicalRampDiameter.Value
+        if target <= 0:
+            target = self.tool.Diameter.Value * self.HELIX_DEFAULT_DIAMETERS
+        minimum = obj.MinimumRampDiameter.Value
+        if minimum >= target:
+            return [minimum]
+        if minimum <= 0:
+            return [target]
+        steps = 4
+        return [target - (target - minimum) * i / steps for i in range(steps + 1)]
+
+    def _fitHelixRamp(self, obj, entry):
+        """Return (radius, centerAngle) for the first helix that fits inside the pocket at
+        `entry` (the plunge's landing point), or None if none does.
+
+        Pocket-geometry-aware (closes the PR #1 review finding that an unchecked helix can
+        swing the cutter into a wall or island on a small pocket): the disc the cutter
+        sweeps -- helix radius + tool radius + radial Stock to Leave, around the helix
+        center -- must lie inside the pocket's removal solid. Tries each candidate diameter
+        (largest first) in each of HELIX_CENTER_DIRECTIONS around the entry point. Checking
+        the full disc rather than the annulus actually swept is deliberately conservative:
+        it also refuses to spiral around an island smaller than the helix's inner bore."""
+        clearance = self.tool.Diameter.Value / 2.0 + obj.ExtraOffset.Value
+        for diameter in self._helixRampDiameters(obj):
+            radius = diameter / 2.0
+            if radius <= 0:
+                continue
+            for centerAngle in self.HELIX_CENTER_DIRECTIONS:
+                center = (
+                    entry.x + radius * math.cos(centerAngle),
+                    entry.y + radius * math.sin(centerAngle),
+                )
+                if self._sweptAreaFits([center], radius + clearance, entry.z):
+                    return radius, centerAngle
+        return None
+
+    def _sweptAreaFits(self, points, radius, z):
+        """True if a disc of `radius` swept along the straight XY segments joining `points`
+        (a single point = just the disc) stays inside one of the pocket's removal solids
+        at height `z`.
+
+        The removal solids are the ones PocketShape.areaOpShapes built for this very
+        execute() (upstream keeps them on `self.removalshapes`): the exact volume the
+        operation is allowed to cut, with walls as its sides and islands as holes through
+        it. A thin slab of the swept area is cut against each solid; anything left over is
+        cutter outside the pocket. `radius` must already include any radial Stock to Leave.
+        Returns False (does not fit) when there is nothing to check against -- an unverified
+        move is treated as unsafe, not waved through."""
+        radius = max(radius - self.FIT_TOLERANCE, self.FIT_TOLERANCE)
+        for tup in getattr(self, "removalshapes", None) or []:
+            solid, isHole = tup[0], tup[1]
+            if isHole or solid.isNull():
+                continue
+            bb = solid.BoundBox
+            height = min(0.1, bb.ZLength / 2.0)
+            if height <= 0:
+                continue
+            z0 = max(bb.ZMin, min(z, bb.ZMax - height))
+            parts = self._sweptSlabParts(points, radius, z0, height)
+            if all(part.cut(solid).Volume <= part.Volume * 1e-6 for part in parts):
+                return True
+        return False
+
+    def _sweptSlabParts(self, points, radius, z0, height):
+        """The swept area as simple solids (a cylinder per point, a box per segment) whose
+        union is the sweep -- the union fits iff every part does, so no fuse is needed."""
+        up = FreeCAD.Vector(0, 0, height)
+        parts = [
+            Part.makeCylinder(radius, height, FreeCAD.Vector(x, y, z0)) for x, y in points
+        ]
+        for (ax, ay), (bx, by) in zip(points, points[1:]):
+            length = math.hypot(bx - ax, by - ay)
+            if length < 1e-6:
+                continue
+            nx, ny = -(by - ay) / length * radius, (bx - ax) / length * radius
+            corners = [
+                FreeCAD.Vector(ax + nx, ay + ny, z0),
+                FreeCAD.Vector(bx + nx, by + ny, z0),
+                FreeCAD.Vector(bx - nx, by - ny, z0),
+                FreeCAD.Vector(ax - nx, ay - ny, z0),
+            ]
+            parts.append(Part.Face(Part.makePolygon(corners + corners[:1])).extrude(up))
+        return parts
+
+    def _findFirstPlunge(self, cmds):
+        """Return (index, start, end) for the first straight vertical plunge (G1, same X/Y
+        as the resolved modal position, Z strictly decreasing), or None if not found.
+
+        FreeCAD omits X/Y/Z from a command when it doesn't change from the previous one
+        (modal G-code) -- e.g. a retract is often just `G0 {"Z": ...}` with no X/Y at all.
+        `start`/`end` are resolved from the running last-known position, not read directly
+        off the matched commands' own (possibly incomplete) Parameters."""
+        lastX = lastY = lastZ = None
+        for i, cmd in enumerate(cmds):
+            p = cmd.Parameters
+            x = p.get("X", lastX)
+            y = p.get("Y", lastY)
+            z = p.get("Z", lastZ)
+            if (
+                cmd.Name in ("G1", "G01")
+                and lastX is not None
+                and x is not None
+                and y is not None
+                and z is not None
+                and abs(x - lastX) < 1e-6
+                and abs(y - lastY) < 1e-6
+                and z < lastZ - 1e-6
+            ):
+                return i, FreeCAD.Vector(lastX, lastY, lastZ), FreeCAD.Vector(x, y, z)
+            lastX, lastY, lastZ = x, y, z
+        return None
+
+    def _buildHelixRampCommands(
+        self, start, end, radius, rampAngleDeg, maxStepdown=0.0, centerAngle=math.pi
+    ):
+        """Build a helix descending from `start` to `end` (same X/Y, start.z > end.z) as
+        directly-sampled G1 segments, plus a short closing move back to `end`'s exact X/Y
+        so the rest of the already-generated toolpath still connects correctly.
+
+        The helix circles a center point offset from the entry point by `radius` in the
+        `centerAngle` direction (chosen by _fitHelixRamp so the helix stays inside the
+        pocket; default pi = toward -X), so the entry point itself sits exactly on the
+        circle -- the tool starts cutting from right where the original straight plunge
+        was, just descending on a spiral instead of straight down.
+
+        `maxStepdown`, if positive, caps the descent per revolution (Fusion's "Maximum Ramp
+        Stepdown" -- constrains tool load during full-width ramping cuts) by using more,
+        shallower revolutions instead of what RampAngle alone would produce.
+        """
+        height = start.z - end.z
+        if height <= 0 or radius <= 0:
+            return None
+        rampAngle = math.radians(max(0.1, min(89.0, rampAngleDeg)))
+        pitch = (2 * math.pi * radius) * math.tan(rampAngle)
+        if pitch <= 0:
+            return None
+        if maxStepdown > 0:
+            pitch = min(pitch, maxStepdown)
+        totalAngle = (height / pitch) * 2 * math.pi
+
+        # MaxRampStepdown has no lower bound on the property itself -- a tiny value (e.g.
+        # 0.00001mm against a 10mm descent) would otherwise demand an astronomically large
+        # totalAngle (millions of radians). CodeRabbit correctly flagged that capping only
+        # numSegments below while leaving that huge totalAngle unchanged doesn't just make a
+        # coarser helix -- each remaining sample's `angle = t * totalAngle` then jumps by
+        # thousands of radians, producing a degenerate, effectively-random-looking zigzag
+        # instead of a spiral. Clamp the revolution count itself (the physical quantity that
+        # actually matters) before deriving numSegments from it, so the geometry stays a
+        # well-formed spiral -- just steeper (more descent per turn) than requested -- at any
+        # input. This also protects the same-shaped case of an extremely shallow RampAngle
+        # over a deep profile, not just an extreme MaxRampStepdown.
+        maxTotalAngle = self.MAX_RAMP_REVOLUTIONS * 2 * math.pi
+        if totalAngle > maxTotalAngle:
+            totalAngle = maxTotalAngle
+        # Whole revolutions, so the spiral finishes back on the entry point -- the plunge
+        # target the rest of the path continues from. A fractional last turn would end
+        # somewhere else on the circle and need a straight move across the helix at full
+        # depth to get back. Rounding up only makes each turn slightly shallower.
+        totalAngle = math.ceil(totalAngle / (2 * math.pi) - 1e-9) * 2 * math.pi
+
+        center = FreeCAD.Vector(
+            start.x + radius * math.cos(centerAngle), start.y + radius * math.sin(centerAngle), 0
+        )
+        # Angular position of the entry point on the circle, as seen from the center.
+        entryAngle = centerAngle + math.pi
+        segmentsPerTurn = 36  # 10-degree steps
+        numSegments = max(4, round(totalAngle / (2 * math.pi) * segmentsPerTurn))
+        # Secondary safety net -- should rarely bind now that totalAngle itself is bounded
+        # above, but keeps the same hard ceiling in place regardless.
+        numSegments = min(numSegments, self.MAX_RAMP_SEGMENTS)
+
+        cmds = []
+        for i in range(1, numSegments + 1):
+            t = i / numSegments
+            angle = entryAngle + t * totalAngle
+            x = center.x + radius * math.cos(angle)
+            y = center.y + radius * math.sin(angle)
+            z = start.z - t * height
+            cmds.append(Path.Command("G1", self._withFeed({"X": x, "Y": y, "Z": z}, getattr(self, "rampFeed", self.vertFeed))))
+
+        last = cmds[-1].Parameters
+        if abs(last["X"] - end.x) > 1e-4 or abs(last["Y"] - end.y) > 1e-4:
+            cmds.append(Path.Command("G1", {"X": end.x, "Y": end.y, "Z": end.z}))
+        return cmds
+
+    def _applyLeadInOut(self, obj):
+        """Fusion's Linking tab Lead-In/Lead-Out. Each lead is, from the toolpath outward:
+        an arc tangent to the cut (Horizontal Lead Radius + Sweep Angle; radius 0 = none),
+        then a straight leg (Linear Lead Distance; 0 = none) that is tangent to that arc, or
+        square to it with Perpendicular. Lead-In and Lead-Out are enabled separately; Same
+        as Lead-In reuses the lead-in's values for the lead-out.
+
+        Design note (why this isn't a simple post-insertion like the ramp/finishing-pass
+        work above): a correct lead-in doesn't just add a move *after* the plunge lands on
+        the true path start -- it moves the plunge itself off the true path, to the far end
+        of the lead, and the lead then carries the tool into the true start already moving
+        in the cut direction at cutting feed, instead of plunging directly into full
+        engagement at a single point. Lead-out mirrors this at the tail, before the final
+        retract.
+
+        Scope:
+        - Every entry (plunge) gets a lead-in and every exit (last cut before the tool
+          lifts) a lead-out, each fitted on its own. Each attaches tangent to the move it
+          joins -- straight or arc (G2/G3).
+        - Pocket-geometry-aware by rejection, not by adaptation: each lead's swept cutter
+          area (tool radius + the radial Stock to Leave in force for that move) is checked
+          against the pocket's walls and islands (_sweptAreaFits). The arc is tried on
+          both sides of the cut (the side away from the wall for the current Cutting
+          Direction first); if neither fits, the lead is left out entirely, with a
+          warning -- it is not shortened or resized.
+        - Not built yet (docs/ROADMAP.md): Vertical Lead Radius, a separate lead feedrate.
+        """
+        cmds = list(obj.Path.Commands)
+        toolRadius = self.tool.Diameter.Value / 2.0
+        stockToLeave = obj.ExtraOffset.Value
+        # Leads on roughing passes must respect the radial stock to leave; using that same
+        # clearance for the finishing passes' leads too is the conservative choice.
+        leadInClearance = toolRadius + stockToLeave
+        leadOutClearance = toolRadius + stockToLeave
+        # Climb milling keeps the tool to the left of the material, so the open side --
+        # where a lead arc has room -- is to the left of travel; conventional, the right.
+        # Only a preference: the other side is still tried, and the fit check decides.
+        sides = (1, -1) if getattr(obj, "CutMode", "Climb") == "Climb" else (-1, 1)
+
+        self.leadInFeed = obj.LeadInFeedrate.Value if hasattr(obj, "LeadInFeedrate") else self.horizFeed
+        self.leadOutFeed = obj.LeadOutFeedrate.Value if hasattr(obj, "LeadOutFeedrate") else self.horizFeed
+        # Every entry gets a lead-in and every exit a lead-out (Allan: not only the first
+        # and last). Entries are the plunges; exits the last cut before the tool lifts.
+        # Worked from the end of the path backward so earlier indices stay valid.
+        events = []
+        inSpec = self._leadSpec(obj, "Lead-In") if getattr(obj, "UseLeadIn", False) else None
+        outSpec = self._leadSpec(obj, "Lead-Out") if getattr(obj, "UseLeadOut", False) else None
+        if inSpec is not None:
+            events += [(idx, "in", (start, end)) for idx, start, end in self._entryPlunges(cmds)]
+        if outSpec is not None:
+            events += [(idx, "out", None) for idx in self._exitCuts(cmds)]
+        skipped = {"Lead-In": 0, "Lead-Out": 0}
+        changed = False
+        for idx, kind, data in sorted(events, key=lambda e: e[0], reverse=True):
+            if kind == "in":
+                newCmds = self._insertLeadIn(cmds, inSpec, leadInClearance, sides, idx, *data)
+            else:
+                newCmds = self._insertLeadOut(cmds, outSpec, leadOutClearance, sides, idx)
+            if newCmds is None:
+                skipped["Lead-In" if kind == "in" else "Lead-Out"] += 1
+                continue
+            cmds = newCmds
+            changed = True
+        for which, count in skipped.items():
+            if count:
+                self._warnLeadSkipped(obj, which, count)
+
+        if changed:
+            obj.Path = Path.Path(cmds)
+            obj.CycleTime = PathOp.getCycleTimeEstimate(obj)
+            self.job.Proxy.getCycleTime()
+
+    def _leadSpec(self, obj, which):
+        """(radius, sweepDegrees, linearDistance, perpendicular) for "Lead-In"/"Lead-Out",
+        or None when those values describe no move at all."""
+        prefix = "LeadIn" if which == "Lead-In" or getattr(obj, "SameAsLeadIn", True) else "LeadOut"
+        radius = max(0.0, getattr(obj, prefix + "Radius").Value)
+        sweep = max(0.0, min(180.0, getattr(obj, prefix + "SweepAngle").Value))
+        linear = max(0.0, getattr(obj, prefix + "Distance").Value)
+        if radius <= 1e-9 or sweep <= 1e-9:
+            radius = sweep = 0.0
+        if radius == 0.0 and linear <= 1e-9:
+            return None
+        return radius, sweep, linear, bool(getattr(obj, prefix + "Perpendicular"))
+
+    def _warnLeadSkipped(self, obj, which, count=1):
+        Path.Log.warning(
+            "%s: %d %s%s left out -- no room inside the pocket there with these values (e.g. "
+            "right against a wall).\n" % (obj.Label, count, which, "" if count == 1 else "s")
+        )
+
+    def _exitCuts(self, cmds):
+        """Indices of the last cutting move (with XY travel) before each point where the tool
+        lifts -- a rapid that rises -- or the path ends."""
+        out = []
+        x = y = z = None
+        lastCut = None
+        for i, cmd in enumerate(cmds):
+            p = cmd.Parameters
+            nx, ny, nz = p.get("X", x), p.get("Y", y), p.get("Z", z)
+            if cmd.Name in ("G1", "G01", "G2", "G02", "G3", "G03"):
+                if (nx, ny) != (x, y) and nz is not None and z is not None and abs(nz - z) < 1e-9:
+                    lastCut = i
+                elif nz is not None and z is not None and nz < z - 1e-9:
+                    lastCut = None  # a plunge starts a new cut
+            elif cmd.Name in ("G0", "G00") and nz is not None and z is not None and nz > z + 1e-9:
+                if lastCut is not None:
+                    out.append(lastCut)
+                lastCut = None
+            x, y, z = nx, ny, nz
+        if lastCut is not None:
+            out.append(lastCut)
+        return out
+
+    @staticmethod
+    def _moveTangent(cmd, fromX, fromY, atEnd):
+        """Unit travel direction of a G1/G2/G3 move from (fromX, fromY): at its start, or at
+        its end if `atEnd`. Arcs give the tangent there (I/J = center offset from the start).
+        None for a move with no XY travel."""
+        p = cmd.Parameters
+        toX, toY = p.get("X", fromX), p.get("Y", fromY)
+        if cmd.Name in ("G2", "G02", "G3", "G03") and ("I" in p or "J" in p):
+            cx, cy = fromX + p.get("I", 0.0), fromY + p.get("J", 0.0)
+            px, py = (toX, toY) if atEnd else (fromX, fromY)
+            rx, ry = px - cx, py - cy
+            r = math.hypot(rx, ry)
+            if r < 1e-9:
+                return None
+            if cmd.Name in ("G3", "G03"):  # counter-clockwise
+                return -ry / r, rx / r
+            return ry / r, -rx / r
+        dx, dy = toX - fromX, toY - fromY
+        length = math.hypot(dx, dy)
+        if length < 1e-6:
+            return None
+        return dx / length, dy / length
+
+    @staticmethod
+    def _leadGeometry(px, py, dx, dy, spec, side, entering):
+        """Geometry of one lead attached to the toolpath at (px, py), where the tool
+        travels in unit direction (dx, dy). `entering`: the lead ends there (lead-in);
+        otherwise it starts there (lead-out). `side`: +1 puts the arc's center to the left
+        of travel, -1 to the right.
+
+        Returns a dict: `junction` (where arc and straight leg meet; equals the attach
+        point with no arc), `far` (the lead's outer end -- where a lead-in starts / a
+        lead-out finishes), `center` (arc center or None), `ccw` (arc direction of travel),
+        `hasLinear`, and `points` (XY polyline from the attach point outward, the arc
+        sampled every <= 5 degrees, for the fit check)."""
+        radius, sweepDeg, linear, perpendicular = spec
+
+        def rot(vx, vy, angle):
+            c, s = math.cos(angle), math.sin(angle)
+            return vx * c - vy * s, vx * s + vy * c
+
+        points = [(px, py)]
+        center = None
+        jx, jy, tx, ty = px, py, dx, dy
+        if radius > 0:
+            cx, cy = px - dy * side * radius, py + dx * side * radius
+            center = (cx, cy)
+            # Travel around a center on the left is counter-clockwise. A lead-in's other
+            # end lies *back* along that travel, a lead-out's *ahead* of it.
+            turn = (-side if entering else side) * math.radians(sweepDeg)
+            steps = max(2, int(math.ceil(sweepDeg / 5.0)))
+            for k in range(1, steps + 1):
+                rx, ry = rot(px - cx, py - cy, turn * k / steps)
+                points.append((cx + rx, cy + ry))
+            jx, jy = points[-1]
+            tx, ty = rot(dx, dy, turn)  # travel direction at the junction
+        fx, fy = jx, jy
+        hasLinear = linear > 1e-9
+        if hasLinear:
+            if perpendicular and center is not None:
+                # Square to the arc = along its radius, on the center's side: the leg runs
+                # between the junction and a point toward the arc center, which keeps it
+                # away from the wall the tangent version would head for.
+                ux, uy = (center[0] - jx) / radius, (center[1] - jy) / radius
+            else:
+                # Tangent: straight on from the arc's end (backward for a lead-in).
+                sign = -1.0 if entering else 1.0
+                ux, uy = sign * tx, sign * ty
+            fx, fy = jx + ux * linear, jy + uy * linear
+            points.append((fx, fy))
+        return {
+            "junction": (jx, jy),
+            "far": (fx, fy),
+            "center": center,
+            "ccw": side > 0,
+            "hasLinear": hasLinear,
+            "points": points,
+        }
+
+    def _fitLead(self, px, py, dx, dy, spec, clearance, sides, z, entering):
+        """First lead geometry (trying each of `sides`) whose swept cutter area fits
+        inside the pocket, or None."""
+        # _leadGeometry samples the arc every <= 5 degrees and the check sweeps the straight
+        # chords between samples, which lie inside the true arc by up to R*(1-cos(2.5 deg)).
+        # The emitted G2/G3 follows the true circle, so widen the check by that much.
+        chordError = spec[0] * (1.0 - math.cos(math.radians(2.5)))
+        for side in sides:
+            geometry = self._leadGeometry(px, py, dx, dy, spec, side, entering)
+            if self._sweptAreaFits(geometry["points"], clearance + chordError, z):
+                return geometry
+            if geometry["center"] is None:
+                break  # no arc: both sides are the same straight leg
+        return None
+
+    def _insertLeadIn(self, cmds, spec, clearance, sides, plungeIdx=None, start=None, end=None):
+        """Return `cmds` with a lead-in added at a plunge (the first one if `plungeIdx` is
+        None), or None if it can't be added safely. `spec` is a _leadSpec tuple;
+        `clearance` is the radius the cutter must keep clear around its center (tool radius
+        + radial stock to leave). The lead is tangent to the first cutting move, straight
+        or arc."""
+        if plungeIdx is None:
+            found = self._findFirstPlunge(cmds)
+            if found is None:
+                return None
+            plungeIdx, start, end = found
+        nextIdx = plungeIdx + 1
+        if nextIdx >= len(cmds):
+            return None
+        nextCmd = cmds[nextIdx]
+        if nextCmd.Name not in ("G1", "G01", "G2", "G02", "G3", "G03"):
+            return None
+        tangent = self._moveTangent(nextCmd, end.x, end.y, atEnd=False)
+        if tangent is None:
+            return None
+        dx, dy = tangent
+        lead = self._fitLead(end.x, end.y, dx, dy, spec, clearance, sides, end.z, True)
+        if lead is None:
+            return None
+        approachX, approachY = lead["far"]
+
+        newCmds = self._movePlunge(cmds, plungeIdx, start, approachX, approachY)
+        if newCmds is None:
+            return None
+        # Then travel the lead inward: straight leg to the junction, arc into the true start.
+        moves = []
+        jx, jy = lead["junction"]
+        feed = getattr(self, "leadInFeed", self.horizFeed)
+        if lead["hasLinear"]:
+            moves.append(self._leadLine(jx, jy, end.z, feed))
+        if lead["center"] is not None:
+            moves.append(self._leadArc((jx, jy), (end.x, end.y), end.z, lead, feed))
+        newCmds[plungeIdx + 1 : plungeIdx + 1] = moves
+        return newCmds
+
+    # -- Preferred Lead-In Positions -----------------------------------------------------
+    def _applyPreferredEntries(self, obj):
+        """Fusion's Preferred Lead-In Positions. Every closed ring entered by a plunge is
+        restarted at its point nearest the closest preferred position: the ring is split
+        there and rotated, so it is the same loop in the same direction, only starting
+        elsewhere; the plunge (and the rapids above it) move to the new start. Ring order is
+        unchanged. A ring that isn't a clean closed loop of G1/G2/G3 moves at one height is
+        left as it is."""
+        targets = [(v.x, v.y) for v in obj.PreferredEntryPoints]
+        cmds = list(obj.Path.Commands)
+        changed = False
+        for plungeIdx, start, end in reversed(self._entryPlunges(cmds)):
+            loop = self._closedLoopAfter(cmds, plungeIdx, end)
+            if loop is None:
+                continue
+            first, last = loop
+            target = min(targets, key=lambda t: (t[0] - end.x) ** 2 + (t[1] - end.y) ** 2)
+            rotated = self._restartLoop(cmds, first, last, end, target)
+            if rotated is None:
+                continue
+            newStart, newMoves = rotated
+            moved = self._movePlunge(cmds, plungeIdx, start, newStart[0], newStart[1])
+            if moved is None:
+                continue
+            moved[first : last + 1] = newMoves
+            cmds = moved
+            changed = True
+        if changed:
+            obj.Path = Path.Path(cmds)
+
+    def _closedLoopAfter(self, cmds, plungeIdx, end):
+        """(first, last) command indices of the closed loop that starts right after the
+        plunge landing at `end` and returns to it at the same height, or None."""
+        x, y, z = end.x, end.y, end.z
+        i = plungeIdx + 1
+        while i < len(cmds):
+            cmd = cmds[i]
+            if cmd.Name not in ("G1", "G01", "G2", "G02", "G3", "G03"):
+                return None
+            p = cmd.Parameters
+            nx, ny, nz = p.get("X", x), p.get("Y", y), p.get("Z", z)
+            if abs(nz - end.z) > 1e-9:
+                return None
+            x, y = nx, ny
+            if i > plungeIdx + 1 and abs(x - end.x) < 1e-6 and abs(y - end.y) < 1e-6:
+                return plungeIdx + 1, i
+            i += 1
+        return None
+
+    @staticmethod
+    def _closestOnMove(cmd, ax, ay, tx, ty):
+        """(distance, (x, y), fraction-or-angle data) of the point on move `cmd` from (ax, ay)
+        closest to (tx, ty)."""
+        p = cmd.Parameters
+        bx, by = p.get("X", ax), p.get("Y", ay)
+        if cmd.Name in ("G2", "G02", "G3", "G03") and ("I" in p or "J" in p):
+            cx, cy = ax + p.get("I", 0.0), ay + p.get("J", 0.0)
+            r = math.hypot(ax - cx, ay - cy)
+            a0 = math.atan2(ay - cy, ax - cx)
+            a1 = math.atan2(by - cy, bx - cx)
+            ccw = cmd.Name in ("G3", "G03")
+            sweep = (a1 - a0) % (2 * math.pi) if ccw else -((a0 - a1) % (2 * math.pi))
+            if abs(sweep) < 1e-12:
+                sweep = 2 * math.pi if ccw else -2 * math.pi
+            at = math.atan2(ty - cy, tx - cx)
+            rel = (at - a0) % (2 * math.pi) if ccw else -((a0 - at) % (2 * math.pi))
+            if (ccw and rel > sweep) or (not ccw and rel < sweep):
+                # outside the arc: nearest end
+                da = math.hypot(tx - ax, ty - ay)
+                db = math.hypot(tx - bx, ty - by)
+                rel = 0.0 if da <= db else sweep
+            px, py = cx + r * math.cos(a0 + rel), cy + r * math.sin(a0 + rel)
+            return math.hypot(tx - px, ty - py), (px, py), (cx, cy)
+        dx, dy = bx - ax, by - ay
+        L2 = dx * dx + dy * dy
+        t = 0.0 if L2 < 1e-18 else max(0.0, min(1.0, ((tx - ax) * dx + (ty - ay) * dy) / L2))
+        px, py = ax + dx * t, ay + dy * t
+        return math.hypot(tx - px, ty - py), (px, py), None
+
+    def _restartLoop(self, cmds, first, last, start, target):
+        """The loop cmds[first..last] (starting and ending at `start`), restarted at its point
+        nearest `target`: ((x, y), new move commands), or None if it already starts there."""
+        z = start.z
+        best = None
+        x, y = start.x, start.y
+        for i in range(first, last + 1):
+            d, point, center = self._closestOnMove(cmds[i], x, y, target[0], target[1])
+            if best is None or d < best[0] - 1e-9:
+                best = (d, i, point, center, (x, y))
+            p = cmds[i].Parameters
+            x, y = p.get("X", x), p.get("Y", y)
+        _d, k, (nx, ny), center, (ax, ay) = best
+        if abs(nx - start.x) < 1e-6 and abs(ny - start.y) < 1e-6:
+            return None
+        cmd = cmds[k]
+        p = dict(cmd.Parameters)
+        bx, by = p.get("X", ax), p.get("Y", ay)
+
+        def piece(fromXY, toXY):
+            params = {kk: v for kk, v in p.items() if kk not in ("X", "Y", "Z", "I", "J", "K")}
+            params.update({"X": toXY[0], "Y": toXY[1], "Z": z})
+            if center is not None:
+                params["I"], params["J"] = center[0] - fromXY[0], center[1] - fromXY[1]
+            return Path.Command(cmd.Name, params)
+
+        # Feeds are modal and only written when they change; after rotation a move could
+        # inherit the plunge's feed. Give every move the feed it ran at in the original order.
+        feedAt, f = {}, None
+        for j in range(first - 1, -1, -1):
+            if "F" in cmds[j].Parameters and cmds[j].Name in ("G1", "G01", "G2", "G02", "G3", "G03"):
+                f = cmds[j].Parameters["F"]
+                break
+        for j in range(first, last + 1):
+            f = cmds[j].Parameters.get("F", f)
+            feedAt[j] = f
+        p.pop("F", None)
+        if feedAt.get(k) is not None:
+            p["F"] = feedAt[k]
+
+        def full(c, j):
+            q = dict(c.Parameters)
+            q.setdefault("Z", z)
+            if feedAt.get(j) is not None:
+                q["F"] = feedAt[j]
+            return Path.Command(c.Name, q)
+
+        tail, head = [], []
+        if math.hypot(bx - nx, by - ny) > 1e-6:
+            tail.append(piece((nx, ny), (bx, by)))
+        tail += [full(cmds[j], j) for j in range(k + 1, last + 1)]
+        head = [full(cmds[j], j) for j in range(first, k)]
+        if math.hypot(nx - ax, ny - ay) > 1e-6:
+            head.append(piece((ax, ay), (nx, ny)))
+        # Moves after the original start keep their (modal) X/Y; give every move explicit
+        # X/Y so the rotated order doesn't depend on what came before.
+        moves, x, y = [], start.x, start.y
+        for c in tail + head:
+            q = dict(c.Parameters)
+            q.setdefault("X", x)
+            q.setdefault("Y", y)
+            x, y = q["X"], q["Y"]
+            moves.append(Path.Command(c.Name, q))
+        return (nx, ny), moves
+
+    # -- Plunge Outside Stock -------------------------------------------------------------
+    OUTSIDE_GAP = 0.5  # mm: minimum gap between the cutter and an area's edge
+    OUTSIDE_DEFAULT_DIAMETERS = 1.25  # default plunge distance, x tool diameter (Allan)
+
+    def _applyOutsideStockEntries(self, obj):
+        """Fusion's "Plunge Outside Stock" ramp type: at every depth level, enter each separate
+        area (each island / boss top, each pocket region) by plunging just outside it, in
+        the open, then feeding sideways into the area's start -- instead of plunging into
+        the material.
+
+        Per level and per area, the first plunge into it is an entry. Its outside point is
+        searched for around the area's outline, offset outward by OutsidePlungeDistance (to
+        the tool center; default 1.25 x tool diameter, never closer than the cutter's
+        clearance + OUTSIDE_GAP), nearest to the entry first;
+        the cutter's whole plunge there and its feed into the area must both miss the
+        finished part (the Job's models). An area enclosed by the part -- a recessed pocket
+        -- has no such point and keeps its normal plunge, with a warning.
+
+        Assumption, stated plainly: the space beside the area is already clear of stock (an
+        earlier operation, or it's above the stock). CAM Studio checks against the finished
+        part, not against leftover stock it can't see. Plunges that re-enter already-cleared
+        air within a level are left alone."""
+        cmds = list(obj.Path.Commands)
+        part = self._partShape()
+        if not cmds or part is None:
+            return
+        clearance = self.tool.Diameter.Value / 2.0 + obj.ExtraOffset.Value
+        distance = getattr(obj, "OutsidePlungeDistance", None)
+        distance = distance.Value if distance is not None else 0.0
+        if distance <= 0:
+            distance = self.OUTSIDE_DEFAULT_DIAMETERS * self.tool.Diameter.Value
+        # Never so close that the plunging cutter would touch the area's edge.
+        distance = max(distance, clearance + self.OUTSIDE_GAP)
+        feed = getattr(self, "leadInFeed", None) or self.horizFeed
+        entries = self._entryPlunges(cmds)
+        regionCache, firstPer = {}, {}
+        for plungeIdx, start, end in entries:
+            key = round(end.z, 6)
+            if key not in regionCache:
+                regionCache[key] = self._areasAt(end.z)
+            region = next(
+                (i for i, face in enumerate(regionCache[key])
+                 if face.isInside(FreeCAD.Vector(end.x, end.y, face.BoundBox.ZMin), 1e-6, True)),
+                None,
+            )
+            if region is not None and (key, region) not in firstPer:
+                firstPer[(key, region)] = plungeIdx
+        regionOf = {idx: kr for kr, idx in firstPer.items()}
+        missing, changed = 0, False
+        for plungeIdx, start, end in reversed(entries):
+            if plungeIdx not in regionOf:
+                continue
+            key, region = regionOf[plungeIdx]
+            point = self._outsidePoint(regionCache[key][region], part, clearance, distance, end)
+            newCmds = None
+            if point is not None:
+                newCmds = self._movePlunge(cmds, plungeIdx, start, point[0], point[1])
+            if newCmds is None:
+                missing += 1
+                continue
+            newCmds.insert(
+                plungeIdx + 1,
+                Path.Command("G1", self._withFeed({"X": end.x, "Y": end.y, "Z": end.z}, feed)),
+            )
+            cmds = newCmds
+            changed = True
+        if missing:
+            Path.Log.warning(
+                "%s: Plunge Outside Stock: %d entr%s kept a normal plunge -- no clear spot just "
+                "outside that area (e.g. a pocket enclosed by the part).\n"
+                % (obj.Label, missing, "y" if missing == 1 else "ies")
+            )
+        if changed:
+            obj.Path = Path.Path(cmds)
+            obj.CycleTime = PathOp.getCycleTimeEstimate(obj)
+            self.job.Proxy.getCycleTime()
+
+    def _partShape(self):
+        shapes = [m.Shape for m in getattr(self, "model", None) or [] if hasattr(m, "Shape") and not m.Shape.isNull()]
+        if not shapes:
+            return None
+        return shapes[0] if len(shapes) == 1 else Part.makeCompound(shapes)
+
+    def _entryPlunges(self, cmds):
+        """(index, start, end) for every straight vertical feed plunge, in path order."""
+        out = []
+        x = y = z = None
+        for i, cmd in enumerate(cmds):
+            p = cmd.Parameters
+            nx, ny, nz = p.get("X", x), p.get("Y", y), p.get("Z", z)
+            if (
+                cmd.Name in ("G1", "G01")
+                and None not in (x, y, z, nx, ny, nz)
+                and abs(nx - x) < 1e-6
+                and abs(ny - y) < 1e-6
+                and nz < z - 1e-6
+            ):
+                out.append((i, FreeCAD.Vector(x, y, z), FreeCAD.Vector(nx, ny, nz)))
+            x, y, z = nx, ny, nz
+        return out
+
+    def _areasAt(self, z):
+        """The separate areas to clear at height z: faces of the removal solids' cross
+        section (islands are holes in them)."""
+        faces = []
+        for tup in getattr(self, "removalshapes", None) or []:
+            solid, isHole = tup[0], tup[1]
+            if isHole or solid.isNull():
+                continue
+            bb = solid.BoundBox
+            zz = max(bb.ZMin + 1e-4, min(z, bb.ZMax - 1e-4))
+            wires = solid.slice(FreeCAD.Vector(0, 0, 1), zz)
+            if not wires:
+                continue
+            try:
+                section = Part.makeFace(wires, "Part::FaceMakerBullseye")
+            except Exception:
+                continue
+            faces += section.Faces
+        return faces
+
+    def _outsidePoint(self, area, part, clearance, distance, entry):
+        """A point `distance` outside `area`'s outline (tool center) where
+        the cutter can plunge to entry.z and then feed straight to `entry` without touching
+        the finished part; nearest to the entry first. None if there is none."""
+        z = entry.z
+        flat = area.copy()
+        flat.translate(FreeCAD.Vector(0, 0, z - flat.BoundBox.ZMin))
+        # The offset's direction follows how FreeCAD happened to orient the cross section
+        # (a r8 round boss came out r1.75 instead of r14.25), so check which way it went
+        # and take the one that grew.
+        try:
+            ring = flat.makeOffset2D(distance, join=0, openResult=False)
+            if ring.Area < flat.Area:
+                ring = flat.makeOffset2D(-distance, join=0, openResult=False)
+        except Exception:
+            return None
+        if ring.Area <= flat.Area:
+            return None
+        candidates = []
+        for edge in ring.OuterWire.Edges if hasattr(ring, "OuterWire") else ring.Edges:
+            n = max(2, int(math.ceil(edge.Length / 1.0)))
+            for i in range(n):
+                v = edge.valueAt(edge.FirstParameter + (edge.LastParameter - edge.FirstParameter) * i / n)
+                candidates.append((v.x, v.y))
+        candidates.sort(key=lambda p: (p[0] - entry.x) ** 2 + (p[1] - entry.y) ** 2)
+        top = max(part.BoundBox.ZMax, z) + 1.0
+        for px, py in candidates:
+            # The whole plunge, from above the part down to z, must miss the part...
+            cutter = Part.makeCylinder(clearance, top - z, FreeCAD.Vector(px, py, z))
+            if part.common(cutter).Volume > 1e-6:
+                continue
+            # ...and so must the feed sideways into the area (a thin slab at z).
+            if self._sweepHitsPart([(px, py), (entry.x, entry.y)], clearance, z, part):
+                continue
+            return px, py
+        return None
+
+    def _sweepHitsPart(self, points, radius, z, part):
+        height = 0.05
+        slabs = self._sweptSlabParts(points, max(radius - self.FIT_TOLERANCE, self.FIT_TOLERANCE), z + 1e-3, height)
+        return any(part.common(s).Volume > 1e-6 for s in slabs)
+
+    def _movePlunge(self, cmds, plungeIdx, start, approachX, approachY):
+        """Return `cmds` with the plunge at `plungeIdx` (descending from `start`) moved to
+        (approachX, approachY) -- the positioning rapids above it retargeted so every
+        descent stays vertical -- or None when that can't be done safely."""
+        # The tool has to be over the approach point *before* it starts descending, so every
+        # rapid that positions it over the old plunge point has to move with it -- not just
+        # the command right before the plunge. Stock output is e.g. `G0 X Y` (at clearance)
+        # then `G0 X Y Z<safe>` then the plunge; other paths omit modal axes (`G0 X Y`,
+        # `G0 Z<safe>`) or split them (`G0 X.. Z..`, `G0 Y..`). So work from each command's
+        # *resolved* position, never from which axes it happens to spell out: walk back over
+        # the run of rapids that leave the tool over the plunge point and retarget each one
+        # that carries X or Y. Stop at the first command that ends anywhere else.
+        resolved = []
+        x = y = z = None
+        for cmd in cmds[:plungeIdx]:
+            params = cmd.Parameters
+            x, y, z = params.get("X", x), params.get("Y", y), params.get("Z", z)
+            resolved.append((x, y, z))
+        posIdxs = []
+        for i in range(plungeIdx - 1, -1, -1):
+            rx, ry, _rz = resolved[i]
+            if (
+                cmds[i].Name not in ("G0", "G00")
+                or rx is None
+                or ry is None
+                or abs(rx - start.x) > 1e-6
+                or abs(ry - start.y) > 1e-6
+            ):
+                break
+            if "X" in cmds[i].Parameters or "Y" in cmds[i].Parameters:
+                posIdxs.append(i)
+        # Nothing to retarget means the tool reaches the plunge point some other way (e.g. a
+        # feed move) -- not a layout this was designed or verified for, so decline instead
+        # of leaving a diagonal descent.
+        if not posIdxs:
+            return None
+        # The earliest retargeted rapid is the one that actually travels sideways to the new
+        # point. If it also loses height, moving its target would turn it into a descent
+        # along a line nobody checked -- decline. (Later ones start and end over the
+        # approach point, so they stay vertical.)
+        first = posIdxs[-1]
+        prevZ = resolved[first - 1][2] if first > 0 else None
+        if prevZ is not None and resolved[first][2] is not None and resolved[first][2] < prevZ - 1e-6:
+            return None
+
+        newCmds = list(cmds)
+        for i in posIdxs:
+            newCmds[i] = Path.Command(
+                cmds[i].Name, dict(cmds[i].Parameters, X=approachX, Y=approachY)
+            )
+        # Shift the plunge's own target XY to the approach point, so the plunge itself
+        # stays a straight vertical descent there instead of a diagonal move.
+        plungeCmd = newCmds[plungeIdx]
+        newCmds[plungeIdx] = Path.Command(
+            plungeCmd.Name, dict(plungeCmd.Parameters, X=approachX, Y=approachY)
+        )
+        return newCmds
+
+    def _insertLeadOut(self, cmds, spec, clearance, sides, cutIdx=None):
+        """Mirror of _insertLeadIn at an exit: leave the end point of a cutting move (the last
+        one if `cutIdx` is None) along its own direction -- tangent, for an arc -- arc first,
+        then the straight leg, before the retract. Returns None if it can't be added
+        safely."""
+        lastCutIdx = cutIdx
+        if lastCutIdx is None:
+            for i in range(len(cmds) - 1, -1, -1):
+                if cmds[i].Name in ("G1", "G01", "G2", "G02", "G3", "G03"):
+                    lastCutIdx = i
+                    break
+        if lastCutIdx is None or lastCutIdx == 0:
+            return None
+        lastCut = cmds[lastCutIdx]
+        if lastCut.Name not in ("G1", "G01", "G2", "G02", "G3", "G03"):
+            return None
+
+        lastX = lastY = lastZ = None
+        for cmd in cmds[:lastCutIdx]:
+            p = cmd.Parameters
+            lastX = p.get("X", lastX)
+            lastY = p.get("Y", lastY)
+            lastZ = p.get("Z", lastZ)
+        p = lastCut.Parameters
+        endX, endY, endZ = p.get("X", lastX), p.get("Y", lastY), p.get("Z", lastZ)
+        if lastX is None or endX is None or lastY is None or endY is None or endZ is None:
+            return None
+        tangent = self._moveTangent(lastCut, lastX, lastY, atEnd=True)
+        if tangent is None:
+            return None
+        dx, dy = tangent
+        lead = self._fitLead(endX, endY, dx, dy, spec, clearance, sides, endZ, False)
+        if lead is None:
+            return None
+
+        moves = []
+        feed = getattr(self, "leadOutFeed", self.horizFeed)
+        if lead["center"] is not None:
+            moves.append(self._leadArc((endX, endY), lead["junction"], endZ, lead, feed))
+        if lead["hasLinear"]:
+            moves.append(self._leadLine(lead["far"][0], lead["far"][1], endZ, feed))
+        return cmds[: lastCutIdx + 1] + moves + cmds[lastCutIdx + 1 :]
+
+    def _leadLine(self, x, y, z, feed):
+        return Path.Command("G1", self._withFeed({"X": x, "Y": y, "Z": z}, feed))
+
+    def _leadArc(self, fromXY, toXY, z, lead, feed):
+        """A true arc move (G3 counter-clockwise / G2 clockwise) between two points on the
+        lead's circle. I/J are the center's offset from the arc's start point."""
+        cx, cy = lead["center"]
+        params = {"X": toXY[0], "Y": toXY[1], "Z": z, "I": cx - fromXY[0], "J": cy - fromXY[1]}
+        return Path.Command("G3" if lead["ccw"] else "G2", self._withFeed(params, feed))
+
+
+def Create(name, obj=None, parentJob=None):
+    """Create(name) ... creates and returns a CAM Studio Pocket operation."""
+    if obj is None:
+        obj = FreeCAD.ActiveDocument.addObject("Path::FeaturePython", name)
+    obj.Proxy = ObjectPocket(obj, name, parentJob)
+    obj.Proxy.loadFeedsFromTool(obj)
+    return obj

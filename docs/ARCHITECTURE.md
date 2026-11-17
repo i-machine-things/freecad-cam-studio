@@ -39,12 +39,16 @@ are what this project replaces, and nothing else.
   touches them directly). An addon means no multi-hour C++ build pipeline, unlike changes to
   Allan's separate `i-machine-things/FreeCAD` fork (where FreeCAD-core changes do need a real
   recompile/Flatpak build) — not needed for this UI-layer project.
-- **File-format compatible with stock CAM.** This workbench creates the same
-  `Path::FeaturePython` objects stock CAM would, so a document made in this workbench opens in
-  vanilla FreeCAD CAM, and vice versa — we're not inventing a parallel data model. **Limit:**
-  operations created by this workbench point at the addon's own modules (their data proxy and
-  their edit page), so editing or recomputing one of *those* operations requires the addon
-  installed; vanilla FreeCAD can't import those modules.
+- **File-format compatible with stock CAM.** This workbench creates/edits the exact same
+  `Path::FeaturePython` objects stock CAM would. A document made in this workbench opens fine in
+  vanilla FreeCAD CAM, and vice versa — we're not inventing a parallel data model. **Caveat:**
+  *opening* a document doesn't need the addon, but *editing* or *recomputing* one of our
+  operations does. The object's `Proxy` (set in `ops/pocket.py`'s `Create`) and `ViewObject.Proxy`
+  (`pages.pocket`) both point at addon modules — vanilla FreeCAD can't import either without the
+  addon installed, so it can neither restore the data proxy nor recompute the operation (not just
+  "can't open its edit panel"). The same goes for Jobs CAM Studio has adopted: their
+  `ViewObject.Proxy` is `pages.setup.JobViewProvider`, so without the addon FreeCAD can't load
+  that view provider (the Job's data itself is stock CAM's and unaffected).
 - **Installable via FreeCAD's Addon Manager** like any other community workbench, once published.
 - **Upstream CAM improvements (bug fixes, new ops) are inherited for free** — this project only
   ever adds a new Gui layer alongside the existing one, never patches `Path/Op/*.py` or
@@ -61,29 +65,105 @@ are what this project replaces, and nothing else.
 
 ## Resolved: how the edit/double-click swap actually works
 
-(Previously an open item — verified by reading `Path/Op/Gui/Base.py` and `Pocket.py`/`Adaptive.py`
-directly.)
+(Previously an open item — verified by reading `Path/Op/Gui/Base.py` and building/running a real
+command against it.)
 
 FreeCAD doesn't dispatch edit-on-double-click by object *type* through a central registry — it's
 per-instance. Every `Path.Op.*` object's `obj.ViewObject.Proxy` is one *generic*
 `Path.Op.Gui.Base.ViewProvider` class (the same class for every operation type), parameterized by
 a small resource bundle (`Base.py`'s `CommandResources`) that names which `TaskPanelOpPage`
 subclass to plug into the shared `TaskPanel` controller (`Base.py`'s generic `TaskPanel` class,
-which assembles the op-specific page plus shared pages like geometry/heights/tool-controller).
+which assembles our op-specific page alongside shared pages like Base Geometry/Heights/Depths/
+Tool Controller — those shared pages' own FreeCAD terminology already closely matches Fusion's
+Heights tab, so they're reused as-is rather than rebuilt).
 
 That `ViewObject.Proxy` assignment happens exactly once, at creation time, inside whichever
-`Command.Create()` built the object — `Base.py:1877`: `obj.ViewObject.Proxy = ViewProvider(obj.ViewObject, res)`.
-Stock CAM's own `Pocket.py`/`Adaptive.py`/etc. each just define their own `TaskPanelOpPage`
-subclass and a `Command` that calls `Base.Create()` with a `res` pointing at that page.
-
-**Implication**: we don't touch `Path/Op/Gui/*.py` at all. We define our own `TaskPanelOpPage`
-subclasses (matching `docs/spec/`'s workflow/terminology) and our own `Command` classes that
-create the same `Path.Op.*` objects but pass a `res` pointing at *our* pages instead of stock
-CAM's. Objects our commands create open in our UI on double-click; objects stock CAM's commands
-create keep opening in stock CAM's UI. Fully additive — no core patch, no subclassing
-`ViewProvider` itself needed.
+`Command.Create()` built the object (`Base.py`'s `Create(res)` function, called from
+`CommandPathOp.Activated()`). We don't touch `Path/Op/Gui/*.py` at all — `commands/create_pocket.py`
+builds its own `CommandResources` pointing `opPageClass` at `pages/pocket.py`'s own
+`TaskPanelOpPage` (built from scratch in Python, no FreeCAD `.ui` resource reused) and registers
+its own `Gui.addCommand(...)` entry. Objects our commands create open in our UI on double-click;
+objects stock CAM's commands create keep opening in stock CAM's UI. Fully additive — no core
+patch, no subclassing `ViewProvider` itself needed. See `pages/pocket.py` for the first concrete
+example of this pattern (Fusion-style grouping/terminology, wired to the same underlying
+`PocketShape.ObjectPocket` properties stock CAM's own panel edits).
 
 **Not yet covered** (not required for Phase 1, flagged for later): making a *pre-existing*,
 stock-CAM-created object open in our UI instead would require reassigning its `ViewObject.Proxy`
 post-hoc (e.g. on document load) — not attempted yet, since Phase 1's plan is new jobs created
 through our own commands, not re-skinning documents that already exist.
+
+## Closing data-model gaps: the `ops/` subclass pattern
+
+Per `docs/ROADMAP.md`'s parity standard, some Fusion options have no backing property on stock
+CAM's operation classes at all (e.g. `PocketShape` has no Z-axis "stock to leave" concept). Where
+that happens, `ops/<name>.py` subclasses the upstream Proxy class — same pattern as
+`pages/*.py` subclassing `TaskPanelPage`, just one layer lower (data, not Gui) — and overrides the
+specific *documented* extension hook that needs new behavior, rather than patching the upstream
+file or reimplementing the whole operation. Our own `objFactory` (passed to
+`Path.Op.Gui.Base.CommandResources`) creates this subclass instead of stock CAM's.
+
+`ops/pocket.py`'s `ObjectPocket` is the first example: it adds an `AxialStockToLeave` property via
+`initPocketOp` (PocketBase's own documented "overwrite this, not `__init__`" hook) and feeds it
+into `_customDepthParams` (`Path.Op.Area.ObjectOp`'s documented per-op depth-customization hook)
+so the computed toolpath actually stops short of the real `FinalDepth` by that amount — verified
+directly against `depth_params.final_depth`, not just that the property exists.
+
+**Gotcha hit doing this** (logged in `.claude/CODING_NOTES.md`): some upstream methods use the
+Python 2-era `super(self.__class__, self)` pattern instead of a literal class name. Subclassing
+one more level deep than upstream expected causes infinite recursion, since `self.__class__` never
+changes across the recursive calls (`PathPocketShape.ObjectPocket.areaOpFeatures` does this —
+worked around by overriding that method to call `PathPocketBase.ObjectPocket.areaOpFeatures(self,
+obj)` directly). Check every overridden method in the chain for this before subclassing a new op.
+
+A second example in the same file adds Helix ramp-entry support, where the gap isn't just a
+missing property but missing *toolpath generation* entirely. `Path.Op.Base.ObjectOp.execute()`'s
+own docstring says "do not overwrite!", so the override doesn't replace it: it calls
+`super().execute(obj)` to let the normal, correct pipeline build the straight-plunge toolpath
+first, then post-processes `obj.Path.Commands` afterward, replacing the first straight vertical
+plunge with a directly-sampled spiral descent (plain trigonometry, not `Part.makeHelix` +
+`Path.Geom.cmdsForEdge` — that combination's edge-direction/reversal semantics produced a
+genuinely backwards toolpath in testing, caught by checking the generated Z values were actually
+descending rather than trusting the library call). This is the general lesson for any "FreeCAD
+has literally nothing for this Fusion option" gap: wrap the documented `execute()`/extension-point
+entry, let upstream do what it already does correctly, then add only the missing behavior on top —
+and verify the *generated output* (actual Z values, actual feed rates), not just that code ran
+without an exception.
+
+The same pattern is how the remaining tracked gaps should be built, not treated as permanent
+documentation footnotes.
+
+## Cross-cutting Gui helpers: `widgets/`
+
+Some gaps aren't operation-specific — every operation's Tool tab needs the same "Select..."
+tool-library button, for example. `widgets/` holds these shared helpers, separate from `pages/`
+(one file per operation) and `ops/` (one file per operation's data-layer Proxy).
+
+`widgets/tool_picker.py` reuses FreeCAD's own existing `Path.Tool.toolbit.ui.selector.
+ToolBitSelector` dialog and `Path.Tool.Controller.Create` factory (the same building blocks stock
+CAM's own Job-creation dialog already uses to let a user pick a tool from the library) rather than
+building a tool-library browser from scratch. A gotcha worth knowing: the built-in tool library is
+lazily seeded on first use elsewhere in stock CAM, so our own code calls
+`Path.Tool.camassets.ensure_assets_initialized(cam_assets)` defensively before opening the
+selector, rather than assuming something else already triggered it.
+
+`widgets/collapsible.py`'s `CollapsibleSection` replaces plain `QGroupBox` sections with Fusion's
+accordion-style disclosure-triangle behavior (confirmed from Autodesk's own help-page screenshot).
+This one isn't a FreeCAD-reuse case -- it's a generic, widely-known Qt UI pattern (a checkable
+`QToolButton` header toggling a hidden content widget), not derived from Autodesk's code or assets.
+Every operation page should use it for its sections instead of `QGroupBox` going forward.
+
+## Materials: use FreeCAD's material system
+
+Default feeds and speeds come from the Job's stock material -- FreeCAD's own
+`Stock.ShapeMaterial`, using FreeCAD's Machinability model for surface speeds -- and the tool
+bit's own Chipload (`cs_materials/library.py`). Materials stay ordinary FreeCAD materials.
+
+The Job editor stays FreeCAD's: `pages/setup.py`'s `JobViewProvider` (a thin subclass of FreeCAD's
+Job view provider, switched onto existing Jobs while CAM Studio is active) only adds a labelled
+Material row to Job Edit's Stock section.
+
+(A CAM Studio material model for per-material chipload tables was built -- an add-on can
+register material models via `Mod/Material/Resources/Modules/<name>/ModuleModelDir`, and it
+round-tripped through vanilla FreeCAD -- then dropped as low-value; `Init.py` removes that
+registration from users' settings.)
