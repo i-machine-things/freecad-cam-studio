@@ -149,20 +149,17 @@ operations of the Job; its local +Z is the tool axis". That is Fusion's Tool Ori
 FreeCAD form: a Multi-axis bar with Tool Orientation = Workplane becomes possible. Polar and
 Wrap machining: Missing.
 
-## Decisions for Allan
+## Decisions (Allan, 2026-11-27)
 
-1. **Feeds on the tool controller.** 26.3 keeps feeds per tool controller, shared by the ops that
-   use it, with presets and Suggest Feeds & Speeds. Per-op feeds (your earlier call: industry
-   standard) would need new properties, which is a feature. Proposal for the reskin: the Tool
-   bar edits the controller's feeds and says how many operations share it; "Suggest Feeds &
-   Speeds" stands in for Fusion's Preset / Reset to Defaults.
-2. **Leads and ramps are dressups in 26.3.** Fusion has them inside the op's Linking tab.
-   Proposal: the Linking bar shows a Leads and a Ramp section that create or edit the op's Lead
-   In/Out and Ramp Entry dressups. That's UX over existing FreeCAD features, but it puts a
-   dressup object in the tree, wrapping the op. Alternative: leave dressups to FreeCAD's own
-   dressup commands.
-3. **Level 2 skin.** On by default, off, or a preference?
-4. **Feed Height / Retract Height labels** wait for the SafeHeight check on rc3 (above).
+1. **Feeds: edit the tool controller.** The Tool bar shows and edits the tool controller's feeds
+   and says how many operations share it; 26.3's **Suggest Feeds & Speeds** stands in for
+   Fusion's Preset / Reset to Defaults. Per-op feeds may return later as a feature branch.
+2. **Leads and ramps: edit from Linking.** The Linking bar has Leads and Ramp sections that add
+   or edit the op's Lead In/Out and Ramp Entry dressups (FreeCAD's own features; the dressup
+   object appears in the tree wrapping the op).
+3. **Level 2 skin: a preference, on by default.** Turning it off gives FreeCAD's stock dialogs
+   back for ops not created from CAM Studio's buttons.
+4. Still open: **Feed Height / Retract Height labels** wait for the SafeHeight check on rc3.
 
 ## Order of work (after the decisions)
 
