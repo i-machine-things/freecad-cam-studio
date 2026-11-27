@@ -1,0 +1,126 @@
+{
+  "_about": "Material names, categories and HSS/carbide surface speeds (m/min) from the FreeCAD Feeds and Speeds addon's material cards, (c) 2022 Daniel Wood, CC-BY 3.0 -- see ATTRIBUTION.md. Not used directly: CAM Studio > Add Feeds & Speeds Materials writes them into FreeCAD's User material library as normal FreeCAD materials.",
+  "version": 1,
+  "materials": [
+    {
+      "name": "Aluminium (6061)",
+      "category": "Metal",
+      "surfaceSpeed": {
+        "HSS": 175.0,
+        "Carbide": 395.0
+      }
+    },
+    {
+      "name": "Aluminium (7075)",
+      "category": "Metal",
+      "surfaceSpeed": {
+        "HSS": 175.0,
+        "Carbide": 395.0
+      }
+    },
+    {
+      "name": "Aluminium (Cast)",
+      "category": "Metal",
+      "surfaceSpeed": {
+        "HSS": 175.0,
+        "Carbide": 395.0
+      }
+    },
+    {
+      "name": "Brass (Hard)",
+      "category": "Metal",
+      "surfaceSpeed": {
+        "HSS": 200.0,
+        "Carbide": 395.0
+      }
+    },
+    {
+      "name": "Brass (Medium)",
+      "category": "Metal",
+      "surfaceSpeed": {
+        "HSS": 175.0,
+        "Carbide": 350.0
+      }
+    },
+    {
+      "name": "Brass (Soft)",
+      "category": "Metal",
+      "surfaceSpeed": {
+        "HSS": 125.0,
+        "Carbide": 300.0
+      }
+    },
+    {
+      "name": "Carbon Steel",
+      "category": "Metal",
+      "surfaceSpeed": {
+        "HSS": 35.0,
+        "Carbide": 120.0
+      }
+    },
+    {
+      "name": "Hard Plastics",
+      "category": "Polymer",
+      "surfaceSpeed": {
+        "HSS": 225.0,
+        "Carbide": 275.0
+      }
+    },
+    {
+      "name": "Hardwood",
+      "category": "Aggregate",
+      "surfaceSpeed": {
+        "HSS": 145.0,
+        "Carbide": 275.0
+      }
+    },
+    {
+      "name": "Soft Plastics",
+      "category": "Polymer",
+      "surfaceSpeed": {
+        "HSS": 225.0,
+        "Carbide": 255.0
+      }
+    },
+    {
+      "name": "Softwood",
+      "category": "Aggregate",
+      "surfaceSpeed": {
+        "HSS": 225.0,
+        "Carbide": 255.0
+      }
+    },
+    {
+      "name": "Stainless (303)",
+      "category": "Metal",
+      "surfaceSpeed": {
+        "HSS": 25.0,
+        "Carbide": 85.0
+      }
+    },
+    {
+      "name": "Stainless (304)",
+      "category": "Metal",
+      "surfaceSpeed": {
+        "HSS": 10.0,
+        "Carbide": 37.5
+      }
+    },
+    {
+      "name": "Stainless (316)",
+      "category": "Metal",
+      "surfaceSpeed": {
+        "HSS": 7.5,
+        "Carbide": 25.0
+      }
+    },
+    {
+      "name": "Tool Steel",
+      "category": "Metal",
+      "surfaceSpeed": {
+        "HSS": 12.0,
+        "Carbide": 45.0
+      }
+    }
+  ]
+}

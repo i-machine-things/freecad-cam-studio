@@ -1,7 +1,20 @@
-"""Console-mode init for CAM Studio.
+"""App-level init for CAM Studio (runs in GUI and console mode).
 
-No new document-object types are registered yet (Phase 1 reuses FreeCAD CAM's existing
-Path.Main.Job / Path.Op.* objects as-is — see docs/ARCHITECTURE.md). This file exists so the
-addon has the conventional Init.py/InitGui.py pair; it will matter once/if this workbench adds
-its own FeaturePython types.
+Nothing to register. An earlier build registered a CAM Studio material model folder with
+FreeCAD's material system; that model was dropped, so remove any such setting a previous run
+left behind (harmless if left, but no reason to keep it).
 """
+
+import FreeCAD
+
+
+def _removeOldMaterialModelRegistration():
+    modules = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/Material/Resources/Modules")
+    if "CamStudio" in modules.GetGroups():
+        modules.RemGroup("CamStudio")
+
+
+try:
+    _removeOldMaterialModelRegistration()
+except Exception as e:  # never block FreeCAD startup over this
+    FreeCAD.Console.PrintWarning("CAM Studio: %s\n" % e)
