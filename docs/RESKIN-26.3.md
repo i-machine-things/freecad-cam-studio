@@ -27,6 +27,31 @@ dump of real 26.3 objects (rc2 binary; rc2 to rc3 changed no CAM settings, only 
      the very first edit; changing that would need a patch to FreeCAD, which we don't do.
 4. **Minimum version 26.3.** `package.xml` `freecadmin` 26.3 once this lands.
 
+## 26.3's own dialog (seen in 26.3, 2026-11-27)
+
+26.3 already moved toward Fusion's layout: an op dialog is a row of **icon tabs** (labels shown
+when there's room, icon-only otherwise), not FreeCAD's old stacked bars. Pocket and Adaptive
+both open with: **Base Geometry, Extensions, Heights, Tool Controller, Operation**.
+
+- **Heights** tab: Work Plane at the top; a height diagram with Clearance, **Retract**
+  (`SafeHeight`: FreeCAD itself now calls it Retract), Start, Step down, Finish step down,
+  Final; Reset to defaults; the **Linking** group (collision avoidance strategy + clearance).
+- **Tool Controller** tab: tool controller and coolant; a warning when the controller is shared
+  ("used by N other operations"); every feed (horizontal, vertical, lead-in, lead-out, ramp,
+  no-engagement), rapids, spindle speed and direction; the Feeds & Speeds button.
+- **Operation** tab, Pocket: cut mode, pattern, angle, step over, radial stock to leave, retract
+  threshold, ignore holes, rest machining, start point.
+- **Operation** tab, Adaptive: cut region, operation type, step over in percent **and** distance,
+  accuracy slider (Tolerance), lift distance, "retract threshold" (`KeepToolDownRatio`), radial
+  stock to leave, force inside-out, use outline, rest machining, **Helix Parameters** (max
+  pitch, max ramp angle, cone angle, max / min diameter), Stop.
+
+So the reskin delta is small: Fusion's tab order (Tool first), FreeCAD's Operation tab split
+into **Passes** and **Linking**, the stepdowns moved from Heights to Passes and the Linking
+group from Heights to Linking, Fusion's names and collapsible sections, and the Leads / Ramp
+dressup sections on Linking. The Feed Height question mostly answers itself: 26.3 labels
+`SafeHeight` "Retract" (still to confirm against rc3 G-code).
+
 ## What carries over from the 1.1 work
 
 - The dialog framework: bar ordering, Heights + Depths folded into one Heights bar, the
