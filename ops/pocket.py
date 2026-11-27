@@ -51,8 +51,10 @@ import Path.Op.Base as PathOp
 import Path.Op.PocketBase as PathPocketBase
 import Path.Op.PocketShape as PathPocketShape
 
+from ops.feeds import FeedAndSpeed
 
-class ObjectPocket(PathPocketShape.ObjectPocket):
+
+class ObjectPocket(FeedAndSpeed, PathPocketShape.ObjectPocket):
     # Hard ceilings on helix ramp generation regardless of requested RampAngle/MaxRampStepdown
     # -- see _buildHelixRampCommands. MAX_RAMP_REVOLUTIONS bounds the actual spiral geometry
     # (the thing that matters physically); MAX_RAMP_SEGMENTS is a secondary sample-count safety
@@ -162,22 +164,9 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
                 ),
             )
             obj.MaxRampStepdown = 0
-        # Feed & Speed, per operation (as in Fusion): copied from the tool controller when
-        # the op is created or its tool changes (loadFeedsFromTool), then the op's own.
-        added = False
-        for name, ptype, doc in (
-            ("SpindleSpeed", "App::PropertyFloat", "Spindle speed (rpm) for this operation"),
-            ("RampSpindleSpeed", "App::PropertyFloat", "Spindle speed (rpm) while ramping"),
-            ("CuttingFeedrate", "App::PropertySpeed", "Feedrate for cutting moves"),
-            ("LeadInFeedrate", "App::PropertySpeed", "Feedrate for the Lead-In move"),
-            ("LeadOutFeedrate", "App::PropertySpeed", "Feedrate for the Lead-Out move"),
-            ("RampFeedrate", "App::PropertySpeed", "Feedrate while ramping (helix)"),
-            ("PlungeFeedrate", "App::PropertySpeed", "Feedrate for straight plunges"),
-        ):
-            if not hasattr(obj, name):
-                obj.addProperty(ptype, name, "Feed & Speed", QT_TRANSLATE_NOOP("App::Property", doc))
-                added = True
-        # Fusion's Multiple Depths options (see depthLevels). Separate from the feeds above.
+        # Feed & Speed, per operation (as in Fusion): ops/feeds.py.
+        self.initFeedProperties(obj)
+        # Fusion's Multiple Depths options (see depthLevels).
         if not hasattr(obj, "UseMultipleDepths"):
             obj.addProperty(
                 "App::PropertyBool", "UseMultipleDepths", "Depth",
@@ -205,23 +194,6 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
             # Keep an existing op's toolpath: FreeCAD's own Finish Depth meant one finishing level.
             finish = getattr(obj, "FinishDepth", None)
             obj.FinishingStepdowns = 1 if finish is not None and finish.Value > 0 else 0
-        if not hasattr(obj, "ChipThinning"):
-            # Separate from the feeds above: adding it to an older document must not count as
-            # "feeds missing" and re-seed feeds the user already set.
-            obj.addProperty(
-                "App::PropertyBool",
-                "ChipThinning",
-                "Feed & Speed",
-                QT_TRANSLATE_NOOP(
-                    "App::Property",
-                    "Raise the cutting feed when the stepover is under half the tool diameter, "
-                    "so the actual chip thickness stays at the chipload",
-                ),
-            )
-            obj.ChipThinning = False
-        if added and getattr(obj, "ToolController", None) is not None:
-            # Restoring a document made before these existed: start from its tool.
-            self.loadFeedsFromTool(obj)
         if not hasattr(obj, "RetractHeight") and hasattr(obj, "ClearanceHeight"):
             obj.addProperty(
                 "App::PropertyDistance",
@@ -494,72 +466,6 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         finally:
             obj.FinalDepth = original
 
-    def loadFeedsFromTool(self, obj):
-        """Fill this op's own Feed & Speed from its defaults: the setup's stock material
-        when it has machining data (cs_materials/library.py: spindle speed from the
-        material's surface speed for this tool's material and diameter; feeds from the
-        chipload -- the tool's own, else the material's table), otherwise the tool
-        controller's values. Fusion
-        fills an operation from the tool's preset for the material the same way.
-
-        Whatever the material can't supply (e.g. no chipload known) stays at the tool
-        controller's value."""
-        tc = getattr(obj, "ToolController", None)
-        if tc is None:
-            return
-        rpm, horiz, vert = tc.SpindleSpeed, tc.HorizFeed.Value, tc.VertFeed.Value
-        defaults = self.materialDefaults(obj)
-        if defaults is not None:
-            rpm = defaults["rpm"]
-            if "cutting" in defaults:
-                horiz = defaults["cutting"] / 60.0
-                vert = defaults["plunge"] / 60.0
-        obj.SpindleSpeed = round(rpm)
-        obj.RampSpindleSpeed = round(rpm)
-        obj.CuttingFeedrate = horiz
-        obj.LeadInFeedrate = horiz
-        obj.LeadOutFeedrate = horiz
-        obj.RampFeedrate = vert
-        obj.PlungeFeedrate = vert
-
-    loadDefaultFeeds = loadFeedsFromTool
-
-    def materialDefaults(self, obj):
-        """cs_materials.library.defaultFeedsFor this op's tool in its setup's stock material
-        (FreeCAD's Job Stock material), or None if the stock has no machining data."""
-        import PathScripts.PathUtils as PathUtils
-        from cs_materials import library
-
-        job = PathUtils.findParentJob(obj)
-        tc = getattr(obj, "ToolController", None)
-        if job is None or tc is None:
-            return None
-        return library.defaultFeedsFor(job, tc.Tool)
-
-    @staticmethod
-    def chipThinningFactor(obj):
-        """Radial chip thinning: with a radial engagement (stepover) ae under half the tool
-        diameter D, a chip is thinner than the feed per tooth by
-            RCTF = sqrt(1 - (1 - 2*ae/D)^2),
-        so the cutting feed is divided by RCTF to keep the real chip thickness at the
-        chipload. 1.0 when off or ae >= D/2. ae is the pocket's StepOver (% of D); note the
-        engagement is higher than that in corners and on the first, full-width cut."""
-        if not getattr(obj, "ChipThinning", False):
-            return 1.0
-        ratio = max(0.0, min(1.0, float(getattr(obj, "StepOver", 100)) / 100.0))
-        if ratio >= 0.5 or ratio <= 0:
-            return 1.0
-        return 1.0 / math.sqrt(1.0 - (1.0 - 2.0 * ratio) ** 2)
-
-    def opExecute(self, obj, *args, **kwargs):
-        # Base.execute has just read the tool controller's feeds into self.horizFeed /
-        # self.vertFeed; replace them with this op's own before the toolpath is generated,
-        # so every move upstream emits carries the op's feeds.
-        if hasattr(obj, "CuttingFeedrate"):
-            self.horizFeed = obj.CuttingFeedrate.Value * self.chipThinningFactor(obj)
-            self.vertFeed = obj.PlungeFeedrate.Value
-        return super().opExecute(obj, *args, **kwargs)
-
     def execute(self, obj):
         # Path.Op.Base.execute's own docstring says "do not overwrite!" -- let it build the
         # correct, normal (straight-plunge) toolpath first, then post-process the result.
@@ -597,40 +503,8 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
         elif rampType == "Plunge Outside Stock":
             self._applyOutsideStockEntries(obj)
         if hasattr(obj, "SpindleSpeed"):
-            self._applySpindleSpeed(obj)
+            self.applySpindleSpeed(obj)
         return result
-
-    def _spindleCommand(self, rpm):
-        """M3/M4 S<rpm> in the tool's own direction (or M5 for 0), the same form FreeCAD's
-        tool change emits. None for a tool that doesn't rotate."""
-        direction = self.tool.Proxy.get_spindle_direction().value if self.tool else None
-        if direction not in ("M3", "M4"):
-            return None
-        if rpm <= 0:
-            return Path.Command("M5")
-        return Path.Command(direction, {"S": rpm})
-
-    def _applySpindleSpeed(self, obj):
-        """Per-operation spindle speed. FreeCAD sets the spindle once, at the tool change,
-        from the tool controller. When this op's speed differs, set it at the op's start
-        and put the controller's speed back at its end, so a following op on the same tool
-        still runs at the speed its own tool change implies."""
-        tcSpeed = obj.ToolController.SpindleSpeed
-        if abs(obj.SpindleSpeed - tcSpeed) < 1e-9:
-            return
-        start = self._spindleCommand(obj.SpindleSpeed)
-        restore = self._spindleCommand(tcSpeed)
-        if start is None:
-            return
-        cmds = list(obj.Path.Commands)
-        # After the op's leading comment lines, before any motion.
-        i = 0
-        while i < len(cmds) and cmds[i].Name.startswith("("):
-            i += 1
-        cmds.insert(i, start)
-        if restore is not None:
-            cmds.append(restore)
-        obj.Path = Path.Path(cmds)
 
     def _appendFinishingPasses(self, obj, count):
         """Fusion's "Finishing Passes": extra wall-cleanup passes stepping the radial Stock
@@ -785,7 +659,7 @@ class ObjectPocket(PathPocketShape.ObjectPocket):
                 rampCmds = [Path.Command("G0", {"Z": rapidTo})] + rampCmds
             # Ramp Spindle Speed: switch for the helix only, then back to the op's speed.
             if spindleSwitch:
-                during, after = self._spindleCommand(rampRpm), self._spindleCommand(opRpm)
+                during, after = self.spindleCommand(rampRpm), self.spindleCommand(opRpm)
                 if during is not None and after is not None:
                     rampCmds = [during] + rampCmds + [after]
             cmds[plungeIdx : plungeIdx + 1] = rampCmds
