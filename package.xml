@@ -1,21 +1,27 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
     <name>CAM Studio</name>
-    <description>
-        A Fusion-360-CAM-style workflow/UX for FreeCAD's existing CAM module. Clean-room: no
-        Autodesk code or assets, built from public documentation only. Not affiliated with
-        Autodesk. See docs/CLEAN-ROOM.md in the repository.
-    </description>
+    <description>A Fusion-360-CAM-style workflow/UX for FreeCAD's existing CAM module. Clean-room: no Autodesk code or assets, built from public documentation only. Not affiliated with Autodesk. See docs/CLEAN-ROOM.md in the repository.</description>
     <version>0.0.0</version>
     <date>2026-11-14</date>
+    <freecadmin>1.1.0</freecadmin>
     <maintainer email="allann2020@gmail.com">Allan</maintainer>
     <license file="LICENSE">MIT</license>
     <url type="repository" branch="master">https://github.com/i-machine-things/freecad-cam-studio</url>
     <url type="bugtracker">https://github.com/i-machine-things/freecad-cam-studio/issues</url>
+    <url type="readme">https://github.com/i-machine-things/freecad-cam-studio/raw/master/README.md</url>
+    <url type="documentation">https://github.com/i-machine-things/freecad-cam-studio/tree/master/docs</url>
     <icon>Resources/icons/workbench.svg</icon>
+    <tag>cam</tag>
+    <tag>cnc</tag>
+    <tag>milling</tag>
+    <tag>toolpath</tag>
     <content>
         <workbench>
+            <name>CAM Studio</name>
             <classname>CamStudioWorkbench</classname>
+            <subdirectory>./</subdirectory>
+            <icon>Resources/icons/workbench.svg</icon>
         </workbench>
     </content>
 </package>
