@@ -335,7 +335,7 @@ type) stay as they are.
 ### Multi-axis tab (tool orientation)
 | Fusion field | Status | Notes |
 |---|---|---|
-| Machining Type (3 choices, icons only) | Missing | 3-axis is the first; the other two need confirming |
+| Machining Type: 3-axis, Polar, Wrap | Missing | Confirmed from the adaptive screenshots (2026-11-27) |
 | Tool Orientation (opt-in section) | Missing | Dropdown, e.g. "Z axis/plane & X axis" |
 | Z Axis / X Axis select, Flip Z / Flip X | Missing | |
 | Align to View, Accessibility Analysis | Missing | |
@@ -436,6 +436,136 @@ restore.
 - **Not in Fusion's dialog**: our Minimize travel, Use outline, Use custom start point. These are
   FreeCAD options. Keep them, under Other Options. (Pocket Pattern and Zig-Zag Angle: removed.)
 - **Chip Thinning** isn't visible in any of these captures. Still blocked on Allan.
+
+## 2D Adaptive Roughing parity map (from Allan's Fusion screenshots, 2026-11-27)
+
+Same method and trust level as the pocket map: Allan's own screenshots of his licensed Fusion
+install, field names only, nothing copied. Current Fusion calls this operation **"2D Adaptive
+Roughing"**. Our command and dialog use that name.
+
+**Upstream base:** `Path.Op.Adaptive.PathAdaptive` (plain `PathOp.ObjectOp`, not an area op).
+It solves with libarea's `area.Adaptive2d`, which takes exactly these settings: tool diameter,
+stepover factor, tolerance, helix ramp diameter, keep-tool-down ratio, stock to leave, force
+inside-out, finishing profile, and operation type (clearing/profiling, inside/outside). The
+solver returns 2D paths, each tagged **Cutting**, **LinkClear** (a link through cleared area),
+**LinkClearAtPrevPass** or **LinkNotClear** (a link that must lift). Upstream's
+`GenerateGCode` turns that into G-code with fixed linking: a full retract to Clearance before
+every level, helix-only entry, LinkClear lifted by `LiftDistance`, no leads, and the tool
+controller's feeds.
+
+**Built (2026-11-27, UX pass):** `ops/adaptive.py` subclasses `PathAdaptive` and runs it
+unchanged (geometry, solver and G-code), adding per-op Feed & Speed (`ops/feeds.py`, shared
+with 2D Offset Roughing) and pinning Operation Type to Clearing (read-only). The dialog
+(`pages/adaptive.py`) uses the shared Tool and Heights bars (`pages/common.py`) and shows
+FreeCAD's Adaptive settings under Fusion's names on its own Passes and Linking bars.
+Verified: with the op's feeds equal to the tool controller's, the G-code is identical to stock
+FreeCAD Adaptive's from the same solver result (the solver itself is not deterministic: two
+identical ops can differ, so compare from one cached result); helix descents run at the Ramp
+Feedrate and Ramp Spindle Speed, cuts at the Cutting Feedrate.
+
+**Next (new features, on a sub-branch):** replace upstream's G-code generation with ours,
+keeping its geometry gathering and solver. Our generator would own every Heights and Linking
+behavior below. Because the solver tags links, the items the pocket can't do (Maximum
+Stay-Down Distance, Transition Feedrate) are buildable here. Anything that changes the cutting
+paths themselves (Direction, Both Ways, Minimum Cutting Radius, Slot Clearing) is inside the
+solver: either post-processing that's proven safe, or out of reach without a solver of our
+own (see **Solver-limited** below).
+
+### Tool tab
+Identical to 2D Offset Roughing's (`tool.png`): Tool + Select/Edit, Preset, Spindle Speed,
+Surface Speed, Ramp Spindle Speed, Cutting Feedrate, Feed per Tooth, Lead-In/Lead-Out/Transition/
+Ramp/Plunge Feedrate, Plunge Feed per Revolution, Coolant. **Have**: the pocket's Tool bar
+(Feed & Speed, Chip Thinning, Reset to Defaults), shared. It lists only the feeds the op applies:
+no Lead-In/Lead-Out Feedrate (no leads yet). Ramp Feedrate and Ramp Spindle Speed apply to the
+helix descent. Missing as on the pocket: Edit..., Preset, Transition Feedrate (buildable here:
+it applies to stay-down links).
+
+### Multi-axis tab
+Machining Type has three choices: **3-axis**, **Polar** (adds a Polar Machining section, Mode
+e.g. "Prefer in control") and **Wrap** (Unwrap Geometry, Wrap Cylinder select, Offset, Radius).
+Tool Orientation section as in the pocket map. All Missing: same as the pocket (#20).
+
+### Geometry tab
+| Fusion field | Status | Notes |
+|---|---|---|
+| Pocket Selections (3 selection-mode buttons) | Partial | FreeCAD's Base Geometry page (faces/edges) |
+| Rest Machining (opt-in): Tool Diameter, Corner Radius | Missing | Upstream Adaptive has no rest machining |
+| Stock Contours (opt-in): Stock Selections | Partial | Upstream `Side = Outside` clears between the selection and the stock outline: the stock-contour case with the stock itself as the contour. No arbitrary contour selection |
+| (FreeCAD) Side, Use Outline, Force Inside Out, Finishing Profile | Not in Fusion | Kept under Passes > Other Options (Side as "Clear: Inside the selection / Outside, to the stock edge") |
+| (FreeCAD) Operation Type | Pinned | Clearing, read-only: Profiling is a contour, which belongs to a contour op |
+| (FreeCAD) Model Aware (experimental) | Not shown | Left at FreeCAD's default (off) |
+
+### Heights tab
+**Four** heights (no Feed Height, unlike the pocket): Clearance (From Retract height, Offset
+0.400 in), Retract (From Stock top, Offset 0.200 in), Top (From Stock top, 0), Bottom (From
+Selected contour(s), 0).
+| Fusion field | Status | Notes |
+|---|---|---|
+| Clearance Height | Partial | ClearanceHeight; no From/Offset |
+| Retract Height | To build | Upstream retracts to Clearance between levels and on LinkNotClear; our generator uses Retract Height |
+| Top Height, Bottom Height | Partial | StartDepth, FinalDepth |
+| (FreeCAD) Safe Height | Not in Fusion | Upstream's helix rapids to it, then feeds to the level. Replaced by Ramp Clearance Height |
+
+### Passes tab
+| Fusion field | Status | Notes |
+|---|---|---|
+| Tolerance | Partial | On the Passes bar. Upstream `Tolerance` is a unitless 0.001–1 accuracy/speed factor, not a length |
+| Optimal Load | Have | Upstream `StepOver`, shown as "[distance] = [%] of tool Ø" (the pocket's stepover row, shared) |
+| Both Ways | Solver-limited | |
+| Minimum Cutting Radius | Solver-limited | |
+| Use Slot Clearing | Solver-limited | |
+| Direction (Climb / Conventional) | Solver-limited | The solver cuts one way. Reversing the output doesn't make conventional: the engagement depends on the order material is removed |
+| **Multiple Depths** (opt-in) | Partial | Section on the Passes bar with FreeCAD's Step Down and Finish Step Down. No on/off; upstream steps full steps then the remainder |
+| - Maximum Roughing Stepdown | Partial | StepDown |
+| - Use Even Stepdowns | To build | Reuse the pocket's `depthLevels` |
+| - Order by Depth, Order By Area | Missing | Upstream does each region to full depth before the next region |
+| **Stock to Leave** (opt-in): Radial, Axial | Partial | Radial = `StockToLeave`, on the Passes bar. Axial only exists with Model Aware; build like the pocket's AxialStockToLeave |
+| **Smoothing** (opt-in, checkbox only) | Missing | |
+| **Feed Optimization** (opt-in): Maximum Directional Change, Reduced Feed Radius, Reduced Feed Distance, Reduced Feedrate, Only Inner Corners | Missing | Same as the pocket (#15) |
+
+### Linking tab
+| Fusion field | Status | Notes |
+|---|---|---|
+| Retraction Policy: Full retraction / Minimum retraction | To build | Full = retract to Retract Height; Minimum = lift only as high as needed to clear the part |
+| High Feedrate Mode: Preserve rapid movement / Preserve axial and radial rapid movement / Preserve axial rapid movement / Preserve radial rapid movement / Preserve single axis rapid movement / Always use high feed | Missing | Generator output choice |
+| Allow Rapid Retract | Missing | |
+| Maximum Stay-Down Distance | To build | Links tagged LinkClear stay down up to this length. Upstream's `KeepToolDownRatio` is a ratio (link path vs straight distance), not a distance |
+| Minimum Stay-Down Clearance | Missing | |
+| Stay-Down Level (e.g. Least) | Missing | |
+| Lift Height | Have | Upstream `LiftDistance` (lift for links through cleared area) |
+| (FreeCAD) Keep Tool Down Ratio | Shown | "Stay-Down Path Limit": stay down when the link's path is at most N x the straight distance. Not Fusion's distance |
+| No-Engagement Feedrate | To build | Feed for moves out of material |
+| Horizontal Lead In/Out Radius | Missing | One radius for both here (the pocket has separate Lead-In/Lead-Out) |
+| Vertical Lead In/Out Radius | Missing | Same as the pocket (#10) |
+| Ramp Type: Predrill / Plunge / Helix | Partial | Shown fixed to Helix (upstream's only entry). Plunge is easy; Predrill needs positions |
+| Ramping Angle | Have | `HelixAngle` |
+| Ramp Taper Angle | Have | `HelixConeAngle` (not with arc output: FreeCAD's arc helix has no cone) |
+| Ramp Clearance Height | To build | Pocket has it |
+| Helical Ramp Diameter, Minimum Ramp Diameter | Partial | Helical = upstream `HelixDiameterLimit` (at most the tool Ø; 0 = tool Ø), passed to the solver, which places the helix. No minimum. FreeCAD's "output the helix as arcs (G2)" is shown beside them |
+| Predrill Positions, Preferred Lead-In Positions, Exit Positions | Missing | Point selections (pocket has Preferred Lead-In Positions). The solver picks its own entry, so preferred entries may need a solver-side answer |
+
+### Ideas to explore (Allan, 2026-11-27, new-feature sub-branch)
+- **3D Adaptive** (model-aware levels). Each Z level clears the area the tool can reach
+  without gouging the model, solved by the same 2D adaptive solver. FreeCAD's Adaptive already
+  has an experimental Model Aware mode that slices the model this way (flat endmills).
+  OpenCAMLib's waterline would give exact level boundaries for ball and bull-nose tools.
+  Its drop cutter is for 3D finishing (projecting a path onto the surface), not roughing.
+  OpenCAMLib (`ocl`) is **not** in the FreeCAD 1.1.4 Flatpak, so FreeCAD's own 3D Surface and
+  Waterline ops don't work there either. It would have to be packaged with the addon (a
+  compiled library).
+- **Deepest first, then step up.** Rough in large steps, as deep as the flute length allows
+  (long, light side cuts), then step back *up* between those levels and rest-machine only the
+  stair-step bands left on sloped or stepped walls. Every step-up level is a narrow area for
+  the same solver. The tool can't start at the very bottom, because the material above has
+  to come off first. Patent caution (CLEAN-ROOM.md): build it from published literature and
+  FreeCAD's solver, not from any vendor's method.
+
+### Solver-limited
+Direction, Both Ways, Minimum Cutting Radius and Use Slot Clearing change how the cutting
+paths are generated. `area.Adaptive2d` has no setting for any of them. Options, in order:
+post-process the solver output where it's provably equivalent; otherwise a solver of our own,
+from published literature (constant-engagement / trochoidal clearing). That's a large project
+on its own; don't start it without Allan's go-ahead.
 
 ## Stock material and default feeds & speeds (built 2026-11-15)
 Built on **FreeCAD's own material system** (Allan: "I don't want to reinvent the wheel"; an

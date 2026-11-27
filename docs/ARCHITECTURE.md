@@ -88,6 +88,17 @@ patch, no subclassing `ViewProvider` itself needed. See `pages/pocket.py` for th
 example of this pattern (Fusion-style grouping/terminology, wired to the same underlying
 `PocketShape.ObjectPocket` properties stock CAM's own panel edits).
 
+**Shared across operations** (`pages/common.py`, `ops/feeds.py`): every op dialog has the same
+bars in Fusion's tab order -- Tool, Base Geometry, Extensions, Heights, Passes, Linking. The Tool
+bar (`ToolBarPage`: tool, per-op Feed & Speed, coolant) is the op page the upstream TaskPanel
+knows about; an op's page subclasses it, names the op and supplies its own Passes and Linking
+bars (`makeBars`), and `attachBars` adds them and reorders the panel. `HeightsBar` folds
+FreeCAD's Heights and Depths pages into one, and `StepoverRow` is the "[distance] = [%] of tool
+Ø" row. On the data side, `ops/feeds.py`'s `FeedAndSpeed` mixin gives any op proxy its own
+Feed & Speed properties and applies them to upstream's generated moves. 2D Offset Roughing
+(`pages/pocket.py`, `ops/pocket.py`) and 2D Adaptive Roughing (`pages/adaptive.py`,
+`ops/adaptive.py`) are both built from these.
+
 **Not yet covered** (not required for Phase 1, flagged for later): making a *pre-existing*,
 stock-CAM-created object open in our UI instead would require reassigning its `ViewObject.Proxy`
 post-hoc (e.g. on document load) — not attempted yet, since Phase 1's plan is new jobs created
