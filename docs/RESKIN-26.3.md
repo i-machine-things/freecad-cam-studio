@@ -1,10 +1,18 @@
-# CAM Studio on FreeCAD 26.3: reskin audit
+# CAM Studio on FreeCAD 26.3
 
-**Direction (Allan, 2026-11-27):** CAM Studio becomes a pure UX reskin of FreeCAD 26.3's CAM
-workbench. Fusion-style operation dialogs over FreeCAD's own operations and settings, **no new
-toolpath features** for now. The 1.1-based work (PR #4 2D Offset Roughing, PR #21 2D Adaptive
-Roughing) is parked as reference; features from it that 26.3 lacks may return later as separate
-feature branches.
+**Direction (Allan, 2026-11-27):** FreeCAD 26.3's new CAM UI/UX is good on its own: tabbed op
+dialogs, tool-controller feeds with presets and a Feeds & Speeds wizard, collision-checked
+linking. CAM Studio becomes a **small add-on of targeted tweaks** to 26.3's own dialogs, not a
+replacement dialog, and **no new toolpath features** for now. Each tweak is filed as an issue
+(label `26.3 tweak`) as Allan finds them while using 26.3. The 1.1-based work (PR #4 2D Offset
+Roughing, PR #21 2D Adaptive Roughing) is parked as reference.
+
+Tweaks either add to FreeCAD's own widgets when they open (no FreeCAD code changed) or watch
+for objects (e.g. new tool controllers); files stay plain FreeCAD CAM files. Some tweaks may be
+better offered to FreeCAD itself as pull requests; decided per tweak.
+
+The rest of this document is the field-by-field audit done first, when the plan was a full
+reskin. It's still the reference for what 26.3 has and lacks against Fusion.
 
 This document maps each Fusion field (from the parity maps in `ROADMAP.md`, built from Allan's
 Fusion screenshots) to what FreeCAD 26.3 has. Source: 26.3rc3 (`src/Mod/CAM`) and a property
