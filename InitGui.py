@@ -15,6 +15,7 @@ class CamStudioWorkbench(Gui.Workbench):
         "CamStudio_Job",
         "Separator",
         "CamStudio_Pocket",
+        "CamStudio_Adaptive",
     ]
     # FreeCAD CAM's own commands, reused as-is (registered by Path.GuiInit.Startup below).
     actions_list = [
@@ -28,6 +29,7 @@ class CamStudioWorkbench(Gui.Workbench):
         "CamStudio_ImportMaterials",
         "Separator",
         "CamStudio_Pocket",
+        "CamStudio_Adaptive",
         "Separator",
     ] + actions_list
 
@@ -37,6 +39,7 @@ class CamStudioWorkbench(Gui.Workbench):
         import commands.create_job  # noqa: F401
         import commands.import_materials  # noqa: F401
         import commands.create_pocket  # noqa: F401
+        import commands.create_adaptive  # noqa: F401
 
         # Simulate / Inspect / Post Process / Check: FreeCAD CAM's own commands. Its GUI
         # init registers them (guarded, so it runs once even if the CAM workbench loads too).
