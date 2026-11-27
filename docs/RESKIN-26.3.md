@@ -7,9 +7,13 @@ replacement dialog, and **no new toolpath features** for now. Each tweak is file
 (label `26.3 tweak`) as Allan finds them while using 26.3. The 1.1-based work (PR #4 2D Offset
 Roughing, PR #21 2D Adaptive Roughing) is parked as reference.
 
-Tweaks either add to FreeCAD's own widgets when they open (no FreeCAD code changed) or watch
-for objects (e.g. new tool controllers); files stay plain FreeCAD CAM files. Some tweaks may be
-better offered to FreeCAD itself as pull requests; decided per tweak.
+**Tweaks go upstream (Allan, 2026-11-27):** improvements to FreeCAD's own CAM UI are proposed
+to FreeCAD itself as pull requests, starting after 26.3's final release (issues labelled
+`upstream`). FreeCAD's `AI_POLICY.md` applies: Allan is the contributor; he fully understands,
+reviews and tests each change and writes the PR description, commit messages and reviewer
+replies himself; AI assistance is disclosed in the PR text and with an
+`Assisted-by: <model>` git trailer (not Co-Authored-By). FreeCAD rejects PRs with clearly
+AI-generated code or text.
 
 The rest of this document is the field-by-field audit done first, when the plan was a full
 reskin. It's still the reference for what 26.3 has and lacks against Fusion.
