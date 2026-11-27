@@ -71,9 +71,13 @@ class MaterialRow:
         self.lastMaterial = None
         refresh = lambda *_: QtCore.QTimer.singleShot(0, self._afterStockChange)
         stockCombo = form.findChild(QtWidgets.QComboBox, "stock")
+        existingCombo = form.findChild(QtWidgets.QComboBox, "stockExisting")
         refreshButton = form.findChild(QtWidgets.QAbstractButton, "refreshStock")
-        if stockCombo is not None:
-            stockCombo.currentIndexChanged.connect(refresh)
+        for combo in (stockCombo, existingCombo):
+            # The stock type, and the solid chosen for "existing" stock: both replace the
+            # Stock object.
+            if combo is not None:
+                combo.currentIndexChanged.connect(refresh)
         if refreshButton is not None:
             refreshButton.clicked.connect(refresh)
         self._refresh()

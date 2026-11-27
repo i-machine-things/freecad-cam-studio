@@ -318,10 +318,11 @@ class ToolBarPage(PathOpGui.TaskPanelPage):
         pages[:] = [self] + upstream + self.bars
 
     def registerSignalHandlers(self, obj):
-        # Upstream opens the last bar; Fusion opens on the Tool tab.
+        # Upstream opens the last bar; Fusion opens on the Tool tab. Select it by its widget:
+        # with FreeCAD's reversed panel layout it isn't the first item.
         toolbox = getattr(self.parent, "form", None)
-        if isinstance(toolbox, QtWidgets.QToolBox):
-            toolbox.setCurrentIndex(0)
+        if isinstance(toolbox, QtWidgets.QToolBox) and toolbox.indexOf(self.form) >= 0:
+            toolbox.setCurrentWidget(self.form)
 
     def _pruneToolComboSentinels(self, obj):
         # The inherited setupToolController() appends "Copy <name>..."/"New tool
@@ -336,12 +337,21 @@ class ToolBarPage(PathOpGui.TaskPanelPage):
             combo.removeItem(combo.count() - 1)
 
     def _onSelectTool(self):
-        tc = ToolPicker.pick_new_tool_controller(self.job, parent=self.form)
+        obj = self.obj
+        before = obj.ToolController
+        tc = ToolPicker.pick_new_tool_controller(self.job, parent=self.form, fallback=before)
         if tc is None:
-            return
-        self.setupToolController(self.obj, self.form.toolController)
-        self._pruneToolComboSentinels(self.obj)
+            return  # cancelled: the operation is unchanged
+        self.setupToolController(obj, self.form.toolController)
+        self._pruneToolComboSentinels(obj)
         self.selectInComboBox(tc.Label, self.form.toolController)
+        # Adding the controller notifies the panel while the picker is still open, so
+        # getFields can't tell the tool changed. Switch to it and load its feeds here.
+        if obj.ToolController is not tc:
+            obj.ToolController = tc
+        if tc is not before and hasattr(obj, "SpindleSpeed"):
+            obj.Proxy.loadFeedsFromTool(obj)
+            self._setFeedFields(obj)
         self.setDirty()
 
     # -- Feed & Speed ----------------------------------------------------------------
@@ -399,17 +409,28 @@ class ToolBarPage(PathOpGui.TaskPanelPage):
         f = self.form
         diameter, flutes = self._toolGeometry()
         rpm = f.spindleSpeed.value()
-        f.surfaceSpeed.setValue(math.pi * diameter * rpm / f.surfaceScale)
+        self._showDerived(f.surfaceSpeed, math.pi * diameter * rpm / f.surfaceScale)
         if self._hasFeed("CuttingFeedrate"):
             cutting = f.cuttingFeedrate.value() * f.feedScale * 60.0  # mm/min
-            f.feedPerTooth.setValue(
-                cutting / (rpm * flutes) / f.lenScale if rpm > 0 and flutes > 0 else 0
+            self._showDerived(
+                f.feedPerTooth, cutting / (rpm * flutes) / f.lenScale if rpm > 0 and flutes > 0 else 0
             )
             f.feedPerTooth.setEnabled(flutes > 0)
         if self._hasFeed("PlungeFeedrate"):
             plunge = f.plungeFeedrate.value() * f.feedScale * 60.0
-            f.plungeFeedPerRev.setValue(plunge / rpm / f.lenScale if rpm > 0 else 0)
+            self._showDerived(f.plungeFeedPerRev, plunge / rpm / f.lenScale if rpm > 0 else 0)
         self._refreshChipThinning()
+
+    @staticmethod
+    def _showDerived(box, value):
+        """Show a derived value and remember what the box displays: leaving the box without
+        editing it must not convert its rounded display back into the stored value."""
+        box.setValue(value)
+        box.setProperty("camStudioShown", box.value())
+
+    @staticmethod
+    def _edited(box):
+        return box.value() != box.property("camStudioShown")
 
     def _refreshChipThinning(self):
         f = self.form
@@ -442,7 +463,7 @@ class ToolBarPage(PathOpGui.TaskPanelPage):
     def _onSurfaceSpeedEdited(self):
         f = self.form
         diameter, _flutes = self._toolGeometry()
-        if diameter > 0:
+        if diameter > 0 and self._edited(f.surfaceSpeed):
             f.spindleSpeed.setValue(f.surfaceSpeed.value() * f.surfaceScale / (math.pi * diameter))
             f.spindleSpeed.editingFinished.emit()
 
@@ -450,7 +471,7 @@ class ToolBarPage(PathOpGui.TaskPanelPage):
         f = self.form
         _diameter, flutes = self._toolGeometry()
         rpm = f.spindleSpeed.value()
-        if flutes > 0 and rpm > 0:
+        if flutes > 0 and rpm > 0 and self._edited(f.feedPerTooth):
             mmPerMin = f.feedPerTooth.value() * f.lenScale * rpm * flutes
             f.cuttingFeedrate.setValue(mmPerMin / 60.0 / f.feedScale)
             f.cuttingFeedrate.editingFinished.emit()
@@ -458,7 +479,7 @@ class ToolBarPage(PathOpGui.TaskPanelPage):
     def _onPlungePerRevEdited(self):
         f = self.form
         rpm = f.spindleSpeed.value()
-        if rpm > 0:
+        if rpm > 0 and self._edited(f.plungeFeedPerRev):
             mmPerMin = f.plungeFeedPerRev.value() * f.lenScale * rpm
             f.plungeFeedrate.setValue(mmPerMin / 60.0 / f.feedScale)
             f.plungeFeedrate.editingFinished.emit()
@@ -696,7 +717,10 @@ class StepoverRow:
         elif self.distance.property("rawValue") != self.distance.property("camStudioLoaded"):
             d = tool_diameter(obj)
             if d > 0:
-                percent = int(min(100, max(1, round(self.distance.property("rawValue") / d * 100.0))))
+                # A maximum: round down, so the stepover never exceeds the distance entered.
+                # Below 1% (the smallest FreeCAD stores) it becomes 1%, and the box shows that.
+                exact = self.distance.property("rawValue") / d * 100.0
+                percent = int(min(100, max(1, math.floor(exact + 1e-9))))
         if percent is None:
             return
         if obj.StepOver != percent:

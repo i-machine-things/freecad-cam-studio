@@ -151,9 +151,22 @@ def importFeedsAndSpeedsMaterials():
                 },
             },
         }
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("---\n# Imported by CAM Studio (FreeCAD material file)\n")
-            yaml.safe_dump(card, f, sort_keys=False, allow_unicode=True, default_flow_style=None)
+        # Write a temporary file and publish it only once it is complete: a half-written
+        # .FCMat would otherwise be skipped as "already there" on every later import.
+        tmp = path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write("---\n# Imported by CAM Studio (FreeCAD material file)\n")
+                yaml.safe_dump(card, f, sort_keys=False, allow_unicode=True, default_flow_style=None)
+            if os.path.exists(path):  # appeared meanwhile: keep the user's file
+                os.remove(tmp)
+                skipped.append(m["name"])
+                continue
+            os.replace(tmp, path)
+        except Exception:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            raise
         written.append(m["name"])
     if written:
         manager().refresh()

@@ -475,7 +475,9 @@ class LinkingPage(BarPage):
 
     def updateLeadInOutFieldsEnabled(self, obj):
         form = self.form
-        inActive = bool(obj.UseLeadIn)
+        # The Lead-In values are also Lead-Out's when Same as Lead-In is ticked: editable
+        # whenever either lead uses them.
+        inActive = bool(obj.UseLeadIn) or (bool(obj.UseLeadOut) and bool(obj.SameAsLeadIn))
         for widget in (
             form.leadInRadius,
             form.leadInSweepAngle,
@@ -572,23 +574,23 @@ class LinkingPage(BarPage):
             self._pickCallback = None
             self._addPreferred(point)
 
+        self._pickView = view
         self._pickCallback = view.addEventCallback("SoMouseButtonEvent", onClick)
         self.form.preferredInfo.setText(
             translate("CamStudio_Pocket", "Click a point in the 3D view...")
         )
 
     def cleanupPage(self, obj):
-        # Don't leave a pick waiting after the dialog closes.
-        import FreeCADGui
-
-        if getattr(self, "_pickCallback", None) is not None and FreeCADGui.ActiveDocument:
+        # Don't leave a pick waiting after the dialog closes. Remove it from the view it was
+        # registered on, which need not be the active one by now.
+        view = getattr(self, "_pickView", None)
+        if getattr(self, "_pickCallback", None) is not None and view is not None:
             try:
-                FreeCADGui.ActiveDocument.ActiveView.removeEventCallback(
-                    "SoMouseButtonEvent", self._pickCallback
-                )
+                view.removeEventCallback("SoMouseButtonEvent", self._pickCallback)
             except Exception:
                 pass
-            self._pickCallback = None
+        self._pickCallback = None
+        self._pickView = None
 
     def _addPreferred(self, point, _info=None):
         if point is None:

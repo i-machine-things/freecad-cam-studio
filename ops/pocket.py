@@ -541,8 +541,14 @@ class ObjectPocket(FeedAndSpeed, PathPocketShape.ObjectPocket):
                 super().execute(obj)
                 passCommands = list(obj.Path.Commands)
                 if finishFeedValue > 0:
-                    passCommands = [self._withFeedOverride(c, finishFeedValue) for c in passCommands]
+                    passCommands = self._withFinishFeed(passCommands, finishFeedValue)
                 allCommands += passCommands
+        except Exception:
+            # Each pass replaced obj.Path with its own output. Never leave that partial
+            # result (one finishing pass, no roughing) where a post could pick it up: clear
+            # the path and let the error mark the operation as failed.
+            obj.Path = Path.Path()
+            raise
         finally:
             obj.ExtraOffset = originalOffset
 
@@ -550,12 +556,28 @@ class ObjectPocket(FeedAndSpeed, PathPocketShape.ObjectPocket):
         obj.CycleTime = PathOp.getCycleTimeEstimate(obj)
         self.job.Proxy.getCycleTime()
 
-    def _withFeedOverride(self, cmd, feed):
-        if cmd.Name not in ("G1", "G01", "G2", "G02", "G3", "G03"):
-            return cmd
-        params = dict(cmd.Parameters)
-        params["F"] = feed
-        return Path.Command(cmd.Name, params)
+    def _withFinishFeed(self, cmds, feed):
+        """The Finish Feedrate on a finishing pass's cutting moves -- feed moves at a constant
+        height -- leaving plunges and other moves that change Z at their own feed."""
+        out = []
+        z = None
+        modal = None  # the feed each move ran at before the override (F is modal)
+        for cmd in cmds:
+            feedMove = cmd.Name in ("G1", "G01", "G2", "G02", "G3", "G03")
+            if feedMove and "F" in cmd.Parameters:
+                modal = cmd.Parameters["F"]
+            nz = cmd.Parameters.get("Z", z)
+            if feedMove:
+                params = dict(cmd.Parameters)
+                if (z is None or nz is None or abs(nz - z) < 1e-9) and ("X" in params or "Y" in params):
+                    params["F"] = feed
+                elif modal is not None:
+                    # Spell out its own feed: it would otherwise inherit the finish feed.
+                    params["F"] = modal
+                cmd = Path.Command(cmd.Name, params)
+            out.append(cmd)
+            z = nz
+        return out
 
     def _applyRetractHeight(self, obj):
         """Fusion's Retract Height. FreeCAD's generator retracts to Clearance Height between
@@ -635,6 +657,7 @@ class ObjectPocket(FeedAndSpeed, PathPocketShape.ObjectPocket):
             rampRpm is not None and rampRpm > 0 and opRpm is not None and abs(rampRpm - opRpm) > 1e-9
         )
         kept, changed = 0, False
+        self.rampStepdownRejects = 0
         for plungeIdx, start, end in reversed(plunges):
             rapidTo = None
             if clearance is not None:
@@ -664,12 +687,23 @@ class ObjectPocket(FeedAndSpeed, PathPocketShape.ObjectPocket):
                     rampCmds = [during] + rampCmds + [after]
             cmds[plungeIdx : plungeIdx + 1] = rampCmds
             changed = True
+        stepdownRejects = self.rampStepdownRejects
+        kept -= stepdownRejects
         if kept:
             Path.Log.warning(
                 "%s: %d plunge%s kept straight -- no helix between the Helical Ramp Diameter "
                 "and the Minimum Ramp Diameter fits there (a ring starting in a corner never "
                 "fits one; elsewhere, reduce the ramp diameters).\n"
                 % (obj.Label, kept, "" if kept == 1 else "s")
+            )
+        if stepdownRejects:
+            Path.Log.warning(
+                "%s: %d plunge%s kept straight -- a helix within the Maximum Ramp Stepdown "
+                "(%s) would need more than %d turns. Raise the Maximum Ramp Stepdown, or cut in "
+                "shallower depth levels.\n"
+                % (obj.Label, stepdownRejects, "" if stepdownRejects == 1 else "s",
+                   FreeCAD.Units.Quantity(obj.MaxRampStepdown.Value, FreeCAD.Units.Length).UserString,
+                   self.MAX_RAMP_REVOLUTIONS)
             )
         if changed:
             obj.Path = Path.Path(cmds)
@@ -836,6 +870,12 @@ class ObjectPocket(FeedAndSpeed, PathPocketShape.ObjectPocket):
         # over a deep profile, not just an extreme MaxRampStepdown.
         maxTotalAngle = self.MAX_RAMP_REVOLUTIONS * 2 * math.pi
         if totalAngle > maxTotalAngle:
+            if maxStepdown > 0 and height / self.MAX_RAMP_REVOLUTIONS > maxStepdown + 1e-9:
+                # The turn cap would make each turn deeper than Maximum Ramp Stepdown. Don't
+                # exceed the programmed limit: no helix here (the caller keeps the plunge and
+                # reports it).
+                self.rampStepdownRejects = getattr(self, "rampStepdownRejects", 0) + 1
+                return None
             totalAngle = maxTotalAngle
         # Whole revolutions, so the spiral finishes back on the entry point -- the plunge
         # target the rest of the path continues from. A fractional last turn would end
@@ -1132,7 +1172,9 @@ class ObjectPocket(FeedAndSpeed, PathPocketShape.ObjectPocket):
             if loop is None:
                 continue
             first, last = loop
-            target = min(targets, key=lambda t: (t[0] - end.x) ** 2 + (t[1] - end.y) ** 2)
+            # The preference that comes closest to this ring (not to its current start): a
+            # point on the ring beats one that is merely near where the ring now begins.
+            target = min(targets, key=lambda t: self._distanceToLoop(cmds, first, last, end, t))
             rotated = self._restartLoop(cmds, first, last, end, target)
             if rotated is None:
                 continue
@@ -1194,6 +1236,18 @@ class ObjectPocket(FeedAndSpeed, PathPocketShape.ObjectPocket):
         t = 0.0 if L2 < 1e-18 else max(0.0, min(1.0, ((tx - ax) * dx + (ty - ay) * dy) / L2))
         px, py = ax + dx * t, ay + dy * t
         return math.hypot(tx - px, ty - py), (px, py), None
+
+    def _distanceToLoop(self, cmds, first, last, start, target):
+        """Distance from `target` to the nearest point of the loop cmds[first..last], which
+        starts at `start`."""
+        best = None
+        x, y = start.x, start.y
+        for i in range(first, last + 1):
+            d, _point, _center = self._closestOnMove(cmds[i], x, y, target[0], target[1])
+            best = d if best is None else min(best, d)
+            p = cmds[i].Parameters
+            x, y = p.get("X", x), p.get("Y", y)
+        return best if best is not None else float("inf")
 
     def _restartLoop(self, cmds, first, last, start, target):
         """The loop cmds[first..last] (starting and ending at `start`), restarted at its point
@@ -1293,7 +1347,11 @@ class ObjectPocket(FeedAndSpeed, PathPocketShape.ObjectPocket):
             distance = self.OUTSIDE_DEFAULT_DIAMETERS * self.tool.Diameter.Value
         # Never so close that the plunging cutter would touch the area's edge.
         distance = max(distance, clearance + self.OUTSIDE_GAP)
-        feed = getattr(self, "leadInFeed", None) or self.horizFeed
+        # The sideways feed in from outside: at the Lead-In Feedrate when Lead-In is on, else
+        # at the cutting feed -- read from this recompute's settings, not a previous one's.
+        feed = self.horizFeed
+        if getattr(obj, "UseLeadIn", False) and hasattr(obj, "LeadInFeedrate"):
+            feed = obj.LeadInFeedrate.Value
         entries = self._entryPlunges(cmds)
         regionCache, firstPer = {}, {}
         for plungeIdx, start, end in entries:

@@ -43,17 +43,23 @@ Controller object.
 Pocket / Open Pocket / Standing Boss) rather than one generic selection. Open-pocket selections
 need an **Extension Method** (Tangent / Closest boundary / Parallel) to close the boundary against
 the stock. **Stock Contours** (+ its own boundary selection) lets the cut area be bounded by the
-Setup's stock box, a sketch, or model edges instead of just the raw selection. Per-contour **cut
+Setup's stock box, a sketch, or model edges instead of just the raw selection. It bounds the
+area the toolpath is *calculated* for; it does not contain tool motion (approaches and links
+may still travel outside it), so it is not a no-cross boundary. Per-contour **cut
 direction arrows** are individually clickable. **Rest Machining** here has its own sub-parameters
 (simulated previous Tool Diameter + Corner Radius), separate from the simple on/off we have.
 **Tool Orientation** is a full secondary coordinate-system control (Setup WCS / Model / explicit
 axis selection / named coordinate system, each with its own Origin option) — lets one operation
 cut at an angle to the Setup's main WCS.
 
-**Heights tab**: Clearance / Retract / Feed / Top / Bottom height. FreeCAD's shared Heights+Depths
-pages give us Clearance/Safe/Start/Final — close, but "Retract" and "Feed" height read as
-*distinct* concepts here, not confirmed 1:1 with FreeCAD's Safe/Start; needs verification, not an
-assumed match.
+**Heights tab**: Clearance / Retract / Feed / Top / Bottom height. CAM Studio's Heights bar maps
+them onto FreeCAD's properties by what the generated G-code does, not by name: **Clearance
+Height** = `ClearanceHeight`; **Feed Height** = `SafeHeight` (the tool rapids down to it and feeds
+from there); **Top Height** = `StartDepth`; **Bottom Height** = `FinalDepth`. **Retract Height**
+is CAM Studio's own `RetractHeight` property (2D Offset Roughing): the height between-pass
+retracts and travel go to, defaulting to the expression `ClearanceHeight` (FreeCAD's own
+behavior until changed). This is a working mapping, not a claim of exact parity with Fusion's
+From/Offset heights.
 
 **Passes tab** (the largest tab by far): Tolerance (spline linearization), **Sideways
 Compensation** (Climb/Conventional — this is our existing `CutMode`), **Minimum Cutting Radius**
